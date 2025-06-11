@@ -1,3 +1,7 @@
 # eCPPT Labs
-
-This repository contains my lab work and notes for the eCPPT certification.
+- Labs/ - Hands-on lab files and materials
+- Writeups/ - Detailed writeups and reports
+- Notes/ - Study notes and cheatsheets
+- Tools/ - Useful scripts and utilities
+- Certificates/ - Certificates and credentials
+- Resume/ - Resume and related documents
