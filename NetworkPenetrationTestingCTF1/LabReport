@@ -1,0 +1,88 @@
+Server.prod.local Penetration Testing - Progress Report
+Target Overview
+
+    IP: 10.5.31.6
+
+    Hostname: server.prod.local
+
+    OS: Microsoft Windows
+
+    Open Ports & Services:
+
+        135/tcp (msrpc)
+
+        139/tcp (netbios-ssn)
+
+        445/tcp (microsoft-ds - SMB)
+
+        1433/tcp (ms-sql-s - Microsoft SQL Server 2016)
+
+        3389/tcp (ms-wbt-server - RDP)
+
+        Several high ports (49664–49696) open for msrpc
+
+Completed Tasks
+
+    SNMP: UDP 161 port is open|filtered but no response to default community strings (public, private, etc.)
+
+    SMB: Access denied when enumerating shares without credentials
+
+    MS-SQL: Server version detected, but no credentials yet to connect
+
+Next Steps & Notes for Tomorrow
+Enumeration & Credential Bruteforce
+
+    SMB Enumeration:
+
+        Once credentials are found, test SMB shares with:
+
+smbclient -L //10.5.31.6 -U <username>%<password>
+
+Access shares with:
+
+    smbclient //10.5.31.6/<sharename> -U <username>%<password>
+
+SMB Bruteforce with Hydra:
+
+    Use wordlists of usernames and passwords to brute force SMB authentication:
+
+    hydra -L users.txt -P passwords.txt smb://10.5.31.6 -t 4 -W 5
+
+MS-SQL Enumeration:
+
+    Attempt to connect using Impacket’s mssqlclient.py:
+
+python3 /usr/share/doc/python3-impacket/examples/mssqlclient.py <username>@10.5.31.6
+
+Test password guessing on MSSQL with Hydra:
+
+        hydra -L users.txt -P passwords.txt mssql://10.5.31.6 -t 4 -W 5
+
+    SNMP:
+
+        Keep testing for valid community strings and run snmpwalk when found.
+
+Wordlists for Credential Guessing (to prepare):
+
+    Usernames (users.txt):
+
+administrator
+guest
+mary
+user
+admin
+test
+
+Passwords (passwords.txt):
+
+    password
+    Password123
+    admin123
+    123456
+    letmein
+
+Bonus
+
+    If a shell is gained, test local MS-SQL access via PowerShell:
+
+Invoke-Sqlcmd -Query "SELECT name FROM sys.databases;" -ServerInstance "localhost" -Username "sa" -Password "<password>"
