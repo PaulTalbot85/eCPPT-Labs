@@ -1,5 +1,3 @@
-Here is a **refined and professional write-up** of your privilege escalation notes. You can use this as documentation or part of a penetration test report or GitHub/LinkedIn write-up.
-
 ---
 
 # **Privilege Escalation Techniques - Windows & Linux**
