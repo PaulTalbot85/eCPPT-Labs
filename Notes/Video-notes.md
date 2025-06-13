@@ -2,6 +2,8 @@
 
 # **Privilege Escalation Techniques - Windows & Linux**
 
+---
+
 ## **1. Privilege Escalation with PowerUp**
 
 With a Meterpreter session on a Windows target, we imported PowerUp.ps1 and ran `Invoke-AllChecks`. PowerUp identified misconfigurations, allowing us to escalate privileges. Two key methods demonstrated:
