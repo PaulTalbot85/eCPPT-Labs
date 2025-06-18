@@ -1,0 +1,159 @@
+---
+
+# Multi-Host Linux Enumeration & Lateral Movement Lab — Full Walkthrough & Analysis
+
+## Overview
+
+This lab involved enumerating multiple Linux hosts on a segmented network, leveraging discovered credentials and artifacts to pivot between machines, and ultimately retrieving a series of flags scattered across user accounts. The exercise reinforced skills in:
+
+* Network enumeration (Nmap)
+* SSH authentication and pivoting
+* File system and user enumeration
+* Extracting secrets from local files and browser artifacts
+* Password harvesting and lateral movement
+
+---
+
+## Lab Environment
+
+* Network range: `192.171.239.2/24`
+* Target machines: `192.171.239.3`, `.4`, `.5`, `.6`
+* Users encountered: `sansa`, `dany`, `kate`, `bronn`, `robert`, `bran`, `john`
+* Services: SSH on all target hosts
+
+---
+
+## Step-by-Step Approach
+
+### 1. Network & Service Enumeration
+
+* Ran an initial ping sweep and port scan with Nmap to identify live hosts and open ports.
+
+  ```bash
+  nmap -sP 192.171.239.2/24
+  nmap -sV 192.171.239.3 192.171.239.4 192.171.239.5 192.171.239.6
+  ```
+
+* Found SSH running on all hosts.
+
+---
+
+### 2. Initial Access: SSH to `sansa@192.171.239.3`
+
+* Credentials provided in challenge:
+  `sansa / welcome@123`
+
+* Logged in, found `flag.txt` and enumerated users via `/etc/passwd`.
+
+---
+
+### 3. User & File Enumeration on Host 1
+
+* Discovered user `dany` and found their home directory.
+* `flag.txt` in `/home/dany` was only readable by `dany`.
+* Checked `sansa`'s `.bash_history` and found an SSH private key `id_rsa` belonging to user `kate` on the second machine.
+
+---
+
+### 4. Pivot: Using Private Key to Access Host 2 as `kate`
+
+* Copied `id_rsa` to local machine and set strict permissions (`chmod 400 id_rsa`).
+* SSH'd into `kate@192.171.239.4` using the key.
+* Retrieved `flag.txt` for `kate`.
+
+---
+
+### 5. Enumerating Users and Files on Host 2
+
+* Found `bronn` user with restricted flag file.
+* Noticed an SQLite database (`database.sqlite`) in `/home`.
+* Used `sqlite3` to dump `Users` table and found possible passwords, including one for `bronn`.
+* Logged in as `bronn` to retrieve their flag.
+
+---
+
+### 6. Browser Artifact Enumeration on Host 2 (Missed / Poorly Enumerated Step)
+
+* Located Firefox profile directory with `logins.json` and `key4.db` files for saved passwords.
+* **Missed initial detailed enumeration of these files**, delaying credential harvesting.
+* Later extracted these files via SCP and decrypted saved passwords using `firepwd` tool.
+* Found password `ce001480` for user `bran`.
+
+---
+
+### 7. Pivot: SSH into Host 3 as `bran`
+
+* Used decrypted password `ce001480`.
+* Retrieved `flag.txt`.
+
+---
+
+### 8. Credential Discovery for User `dany`
+
+* Checked `/home/dany/credentials.txt` and found password `ce16384290b`.
+* SSH'd into Host 1 as `dany` using these credentials.
+* Retrieved `flag.txt`.
+
+---
+
+### 9. Final Pivot: SSH into Host 4 as `bronn`
+
+* Used password from SQLite DB (`9f39b96305711`).
+* Retrieved final `flag.txt`.
+* Found user `robert` with another restricted flag file.
+* Found `robert`'s password in `/var/mail/bronn`.
+* Logged in as `robert` and retrieved last flag.
+
+---
+
+## Flags Obtained
+
+| Flag # | Value                            | Location / User        |
+| ------ | -------------------------------- | ---------------------- |
+| 1      | 0f558e86f6fcd0827ad7e4286bd5bbee | `sansa@192.171.239.3`  |
+| 2      | f0af063e22b83fda17710cb18efb591b | `dany@192.171.239.3`   |
+| 3      | 0f558e86f6fcd0827dc7e4286bd5bbee | `kate@192.171.239.4`   |
+| 4      | e14f063e22b83fda17710cb18efb591b | `bronn@192.171.239.4`  |
+| 5      | 0f558e86f55550827ad7e4286bd5bbee | `bran@192.171.239.5`   |
+| 6      | 4050f55886f6cd0827d7e4286bd5bbee | `bronn@192.171.239.6`  |
+| 7      | f0af063e22b8377777710cb18efb591b | `robert@192.171.239.6` |
+
+---
+
+## Challenges & Missed Enumeration
+
+* **Poor initial enumeration of browser artifacts on Host 2**:
+  The Firefox saved passwords in `logins.json` and `key4.db` were discovered late in the process. This delayed obtaining the `bran` user's password and slowed lateral movement.
+
+* **Why it happened:**
+  Focus was heavily on file and user enumeration, but saved browser credentials are a classic treasure trove often overlooked in Linux pentests.
+
+* **How to improve:**
+
+  * Always check browser profile directories (`~/.mozilla/firefox/`) for sensitive data.
+  * Learn to use tools like `firepwd` to decrypt saved Firefox passwords.
+  * Make browser artifact enumeration part of standard pentesting post-exploitation enumeration checklists.
+
+---
+
+## Lessons Learned
+
+* **Credential reuse and saved passwords are common lateral movement vectors.**
+  Browser artifacts, private SSH keys, and plaintext credentials in files/mail can unlock multiple machines.
+
+* **Comprehensive enumeration pays off.**
+  Missing seemingly small files like Firefox’s `logins.json` can delay a successful attack chain.
+
+* **Document your findings and revisit missed areas.**
+  During complex multi-host exercises, it’s common to overlook details — make notes and re-check areas if stuck.
+
+* **Automation helps but don’t rely solely on tools.**
+  Manual inspection of user directories often reveals credentials and artifacts that automated tools miss.
+
+---
+
+## References
+
+* Firefox password decryptor: [firepwd by lclevy](https://github.com/lclevy/firepwd)
+
+---
