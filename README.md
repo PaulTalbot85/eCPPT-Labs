@@ -1,7 +1,3 @@
-Here’s a professional README for that repository, matching the style of the other two you’ve had rewritten:
-
----
-
 # eCPPT Labs Repository
 
 This repository contains structured materials, reports, and resources related to the **eLearnSecurity Certified Professional Penetration Tester (eCPPT)** certification.
