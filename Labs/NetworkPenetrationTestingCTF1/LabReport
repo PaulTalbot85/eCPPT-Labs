@@ -1,10 +1,5 @@
-Here you go — same walkthrough, with **all IPs replaced by placeholders** so you can drop it straight into your notes. I kept hostnames (e.g., `server.prod.local`) where you used them, and replaced literal IPs with clear tags like `<KALI IP>`, `<FLAG1 TARGET IP>`, `<MSSQL HOST>`, and `<WEB IP>`.
-
----
 
 # INE eCPPT Skill Check Lab — SNMP & Privilege Escalation — Flag 1 Walkthrough
-
-**Objective:** Obtain Flag 1 from the target system at `<FLAG1 TARGET IP>`.
 
 ---
 
