@@ -22,7 +22,10 @@ This CTF is part of the eCPPT (eLearnSecurity Certified Professional Penetration
 
     Built-in Windows and Linux command-line tools.
 
-🏁 Flag 1 - User-Level Access (Windows)
+
+## Flag 1 ## 
+User-Level Access (Windows)
+
 Step 1: Enumerate Stored Credentials
 
 Starting from the default student user on Windows, enumerated stored credentials:
@@ -69,7 +72,11 @@ Displayed contents of flag1.txt:
 type flag1.txt
 
 Flag 1: fa9598968df8452a80267dd377fc77bc
-🛗 Flag 2 - Privilege Escalation to Administrator (Windows)
+
+
+## Flag 2 ##
+Privilege Escalation to Administrator (Windows)
+
 Step 5: Investigate PowerShell History
 
 Checked PowerShell history for potential credentials:
@@ -106,7 +113,10 @@ cd C:\Users\Administrator
 type flag2.txt
 
 Flag 2: 21b72b0bfa2144bba6b5c4ccd33ef1c2
-🐧 Flag 3 - User-Level Access (Linux target2.ine.local)
+
+## Flag 3 ##
+User-Level Access (Linux target2.ine.local)
+
 Step 8: Exploit libssh Authentication Bypass
 
 Used Metasploit's auxiliary module to bypass SSH authentication without valid credentials:
@@ -129,9 +139,11 @@ id
 Checked user’s home directory for flags:
 
 ls /home/user
-# Output: flag3.txt (file present but could not read directly)
+# Output: flag3.txt
 
-🗄️ Flag 4 - Root Access via Extracting Database Credentials (Linux)
+## Flag 4 ##
+Root Access via Extracting Database Credentials (Linux)
+
 Step 10: Search for Database Files
 
 Searched the entire file system for database files:
@@ -172,7 +184,8 @@ ls /root
 cat /root/flag4.txt
 # Output: a65b580d6d9a49d2bb5f3126eb88f505
 
-✅ Conclusion
+
+# Conclusion
 
 This lab effectively demonstrated privilege escalation on both Windows and Linux targets through multiple techniques:
 
