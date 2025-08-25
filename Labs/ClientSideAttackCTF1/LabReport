@@ -1,6 +1,6 @@
-# 🛡️ INE Client-Side Attacks CTF 1 – Penetration Testing Report
+# INE Client-Side Attacks CTF 1 – Penetration Testing Report
 
-## 🌟 Objective
+## Objective
 
 This Capture the Flag (CTF) lab simulates a realistic client-side attack scenario where the goal is to:
 
@@ -12,7 +12,7 @@ This Capture the Flag (CTF) lab simulates a realistic client-side attack scenari
 
 ---
 
-## 📍 Lab Environment (Sample IPs)
+## Lab Environment (Sample IPs)
 
 | Role              | Hostname          | IP Address |
 | ----------------- | ----------------- | ---------- |
@@ -24,18 +24,18 @@ This Capture the Flag (CTF) lab simulates a realistic client-side attack scenari
 
 ---
 
-## ✅ Flag 1 – Reconnaissance & Data Exposure
+## Flag 1 – Reconnaissance & Data Exposure
 
-### 🌟 Objective
+### Objective
 
 Locate an internal email address and flag exposed on the public site.
 
-### 🛠️ Tools Used
+### Tools Used
 
 * `dirb`
 * `curl`
 
-### 🔎 Steps
+### Steps
 
 1. Run directory brute-force:
 
@@ -62,9 +62,9 @@ Locate an internal email address and flag exposed on the public site.
 
 ---
 
-## ✅ Flag 2 – Phishing Exploit via HTA Attachment
+## Flag 2 – Phishing Exploit via HTA Attachment
 
-### 🌟 Objective
+### Objective
 
 Deliver a phishing payload to the internal email. Gain reverse shell.
 
@@ -123,18 +123,18 @@ Deliver a phishing payload to the internal email. Gain reverse shell.
 
 ---
 
-## 🔁 Stable Session for Pivoting
+## Stable Session for Pivoting
 
-### 🌟 Objective
+### Objective
 
 Set up a persistent shell to avoid re-exploitation.
 
-### 🛠️ Tools Used
+### Tools Used
 
 * `msfvenom`
 * `Metasploit`
 
-### 🔎 Steps
+### Steps
 
 1. Create EXE payload:
 
@@ -163,19 +163,19 @@ Set up a persistent shell to avoid re-exploitation.
 
 ---
 
-## 🔜 Internal Pivoting to `web.prod.local`
+## Internal Pivoting to `web.prod.local`
 
-### 🌟 Objective
+### Objective
 
 Pivot internally to reach web.prod.local.
 
-### 🛠️ Tools Used
+### Tools Used
 
 * `autoroute`
 * `socks_proxy`
 * `proxychains`
 
-### 🔎 Steps
+### Steps
 
 1. Add route in Meterpreter:
 
@@ -205,18 +205,18 @@ Pivot internally to reach web.prod.local.
 
 ---
 
-## ✅ Flag 3 – Exploit Rejetto HFS (CVE-2024-23692)
+## Flag 3 – Exploit Rejetto HFS (CVE-2024-23692)
 
-### 🌟 Objective
+### Objective
 
 Exploit vulnerable HFS 2.3m server on web.prod.local
 
-### 🛠️ Tools Used
+### Tools Used
 
 * `* `custom hfs_rce.sh` Bash exploit
 * `curl`, `python3 -m http.server`
 
-### 🔎 Steps
+### Steps
 
 1) Add internal route
 
